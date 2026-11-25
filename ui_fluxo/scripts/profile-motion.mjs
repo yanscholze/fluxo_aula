@@ -7,14 +7,23 @@ const baseURL = process.argv[3] ?? "http://127.0.0.1:4174";
 const experiment = process.argv[4] ?? "normal";
 const trials = Number(process.argv[5] ?? 5);
 await mkdir("outputs/performance", { recursive: true });
-const browser = await chromium.launch({ headless: true });
+const headed = process.env.PROFILE_HEADED === "1";
+const viewport = {
+  width: Number(process.env.PROFILE_WIDTH ?? 1920),
+  height: Number(process.env.PROFILE_HEIGHT ?? 1080),
+};
+const browser = await chromium.launch({
+  headless: !headed,
+  ...(headed ? { executablePath: "/usr/bin/google-chrome-stable" } : {}),
+});
 const browserSession = await browser.newBrowserCDPSession();
 const { gpu } = await browserSession.send("SystemInfo.getInfo");
 const context = await browser.newContext({
-  viewport: { width: 1920, height: 1080 },
+  viewport,
   reducedMotion: "no-preference",
 });
 const page = await context.newPage();
+if (headed) await page.bringToFront();
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 await page.goto(baseURL + "/painel");
@@ -147,7 +156,8 @@ const summary = {
   baseURL,
   experiment,
   trials,
-  viewport: { width: 1920, height: 1080 },
+  viewport,
+  headed,
   browser: browser.version(),
   hardware: {
     cpu: os.cpus()[0].model,

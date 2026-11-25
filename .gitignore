@@ -6,3 +6,6 @@ playwright-report/
 *.log
 video.mp4
 
+# Large, reproducible Chrome traces stay local; summaries remain reviewable.
+ui_fluxo/outputs/performance/*-trial-*-trace.json
+

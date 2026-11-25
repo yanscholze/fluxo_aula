@@ -2,28 +2,87 @@ import { test, expect, type Page } from "@playwright/test";
 
 test.use({ video: { mode: "on", size: { width: 1440, height: 900 } } });
 
+declare global {
+  interface Window {
+    readFluxoBurst: () => { clip: string; hole: number; colors: string[] };
+  }
+}
+
+// Observe actual GPU uniforms or SVG geometry without an application test API.
+// This observer is not installed by the separate performance capture.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.readFluxoBurst = () => {
+      const curtain = document.querySelector(".route-color-curtain");
+      const canvas = curtain?.querySelector("canvas");
+      const gl = canvas?.getContext("webgl");
+      const program = gl?.getParameter(
+        gl.CURRENT_PROGRAM,
+      ) as WebGLProgram | null;
+      if (gl && program) {
+        const uniform = (name: string) =>
+          gl.getUniform(program, gl.getUniformLocation(program, name)!);
+        const point = uniform("uOrigin") as Float32Array;
+        return {
+          clip: `circle(${uniform("uOuterRadius")}px at ${point[0]}px ${point[1]}px)`,
+          hole: Number(uniform("uHoleRadius")),
+          colors: ["uHighlight", "uColor", "uDepth"].map(
+            (name) =>
+              `rgb(${Array.from(uniform(name) as Float32Array, (n) => Math.round(n * 255)).join(", ")})`,
+          ),
+        };
+      }
+      return {
+        clip: curtain ? getComputedStyle(curtain).clipPath : "",
+        hole: Number(
+          curtain
+            ?.querySelector(".route-color-aperture")
+            ?.getAttribute("d")
+            ?.match(/ Z M [-\d.e+]+ [-\d.e+]+ a([\d.e+]+) /)?.[1] ?? "0",
+        ),
+        colors: Array.from(
+          curtain?.querySelectorAll("stop") ?? [],
+          (stop) => getComputedStyle(stop).stopColor,
+        ),
+      };
+    };
+  });
+});
+
 async function expectBurstAt(page: Page, point: { x: number; y: number }) {
   const curtain = page.locator(".route-color-curtain");
   await expect(curtain).toBeAttached();
-  const center = await curtain.evaluate((element) => {
-    const coordinates = getComputedStyle(element).clipPath.match(
-      / at ([\d.]+)px ([\d.]+)px/,
-    );
-    return coordinates
-      ? { x: Number(coordinates[1]), y: Number(coordinates[2]) }
-      : null;
-  });
-  expect(center).not.toBeNull();
-  expect(Math.abs(center!.x - point.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(center!.y - point.y)).toBeLessThanOrEqual(1);
-  const opening = await curtain
-    .locator(".route-color-aperture")
-    .getAttribute("d");
-  const circle = opening!.match(/ Z M ([-\d.e+]+) ([-\d.e+]+) a([\d.e+]+) /)!;
-  expect(
-    Math.abs(Number(circle[1]) + Number(circle[3]) - point.x),
-  ).toBeLessThanOrEqual(1);
-  expect(Math.abs(Number(circle[2]) - point.y)).toBeLessThanOrEqual(1);
+  const centers = await curtain.evaluate(
+    (element) =>
+      new Promise<{ phase: string; x: number; y: number }[]>((resolve) => {
+        const output: { phase: string; x: number; y: number }[] = [];
+        const start = performance.now();
+        const sample = () => {
+          const phase =
+            element.closest<HTMLElement>(".route-color-stage")?.dataset.phase ??
+            "";
+          const coordinates = window
+            .readFluxoBurst()
+            .clip.match(/ at ([\d.]+)px ([\d.]+)px/);
+          if (coordinates)
+            output.push({
+              phase,
+              x: Number(coordinates[1]),
+              y: Number(coordinates[2]),
+            });
+          if (element.isConnected && performance.now() - start < 5000)
+            requestAnimationFrame(sample);
+          else resolve(output);
+        };
+        requestAnimationFrame(sample);
+      }),
+  );
+  expect(centers.length).toBeGreaterThan(1);
+  expect(centers.some((center) => center.phase === "revealing")).toBe(true);
+  for (const center of centers) {
+    expect(Math.abs(center.x - point.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(center.y - point.y)).toBeLessThanOrEqual(1);
+  }
   await expect(curtain).toHaveCount(0);
 }
 
@@ -205,21 +264,14 @@ test.describe("movimento expressivo", () => {
               const tick = () => {
                 const stage =
                   document.querySelector<HTMLElement>(".route-color-stage");
-                const curtain = document.querySelector(".route-color-curtain");
-                const style = curtain && getComputedStyle(curtain);
+                const drawing = window.readFluxoBurst();
                 frames.push({
                   time: performance.now() - start,
                   phase: stage?.dataset.phase,
                   path: window.location.pathname,
                   heading: document.querySelector("h1")?.textContent ?? null,
-                  clip: style?.clipPath ?? "",
-                  hole: Number(
-                    curtain
-                      ?.querySelector(".route-color-aperture")
-                      ?.getAttribute("d")
-                      ?.match(/ Z M [-\d.e+]+ [-\d.e+]+ a([\d.e+]+) /)?.[1] ??
-                      "0",
-                  ),
+                  clip: drawing.clip,
+                  hole: drawing.hole,
                 });
                 if (
                   performance.now() - start < 1700 &&
@@ -237,11 +289,7 @@ test.describe("movimento expressivo", () => {
     await account.click({ position: { x: 14, y: 9 } });
     const stage = page.locator(".route-color-stage");
     await expect(stage).toHaveAttribute("data-phase", "covered");
-    const colors = await page
-      .locator(".route-color-curtain stop")
-      .evaluateAll((stops) =>
-        stops.map((stop) => getComputedStyle(stop).stopColor),
-      );
+    const colors = await page.evaluate(() => window.readFluxoBurst().colors);
     expect(colors).toContain("rgb(23, 52, 90)");
     expect(colors).toContain("rgb(16, 29, 52)");
     await page.screenshot({
@@ -303,6 +351,68 @@ test.describe("movimento expressivo", () => {
         .locator(".desktop-sidebar")
         .getByRole("link", { name: "Contas", exact: true }),
     ).toHaveAttribute("aria-current", "page");
+  });
+  test("mantém a transição SVG quando WebGL está indisponível", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const getContext = HTMLCanvasElement.prototype.getContext;
+      Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+        value(this: HTMLCanvasElement, type: string, ...options: unknown[]) {
+          if (type === "webgl") return null;
+          return Reflect.apply(getContext, this, [type, ...options]);
+        },
+      });
+    });
+    await page.goto("/painel");
+    await expect(page.locator(".route-color-stage")).toHaveCount(0);
+    await page.getByRole("button", { name: "Rever animações" }).click();
+    await expect(page.locator(".route-color-stage")).toHaveAttribute(
+      "data-renderer",
+      "svg",
+    );
+    await expectBurstAt(
+      page,
+      await page
+        .getByRole("button", { name: "Rever animações" })
+        .evaluate((node) => {
+          const rect = node.getBoundingClientRect();
+          return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        }),
+    );
+  });
+
+  test("perda do contexto gráfico recupera sem travar ou perder filtros", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto("/painel");
+    await expect(page.locator(".route-color-stage")).toHaveCount(0);
+    await page.getByRole("button", { name: "3M", exact: true }).click();
+    await page.getByRole("button", { name: "Rever animações" }).click();
+    const canvas = page.locator(".route-color-canvas");
+    await expect(canvas).toBeAttached();
+    await canvas.evaluate((node: HTMLCanvasElement) => {
+      const extension = node
+        .getContext("webgl")
+        ?.getExtension("WEBGL_lose_context");
+      if (!extension)
+        throw new Error("Context loss test requires WEBGL_lose_context");
+      extension.loseContext();
+    });
+    await expect(page.locator(".route-color-stage")).toHaveAttribute(
+      "data-renderer",
+      "svg",
+    );
+    await expect(page.locator(".route-color-stage")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "3M", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("heading", { name: "Seu dinheiro, com clareza." }),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
   });
 });
 

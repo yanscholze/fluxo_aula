@@ -55,6 +55,7 @@ import {
   Notice,
 } from "../design-system/ui";
 import { ColorTransition, type MotionOrigin } from "../motion/color-transition";
+import { warmColorTransition } from "../motion/color-canvas";
 import { MotionScene } from "../motion/scene";
 import { PageReady, useColorNavigation } from "../motion/navigation";
 import { usePanelScroll } from "./use-panel-scroll";
@@ -277,6 +278,9 @@ export default function Shell() {
     [notify, theme, setTheme],
   );
   useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    if (!reduced) warmColorTransition();
+  }, [reduced]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {

@@ -90,8 +90,11 @@ export function AnimatedValue({
   return (
     <>
       <span className="sr-only">{format(value)}</span>
-      <span ref={ref} aria-hidden="true">
-        {format(value)}
+      <span className="animated-value" aria-hidden="true">
+        <span className="animated-value-size">{format(value)}</span>
+        <span className="animated-value-live" ref={ref}>
+          {format(value)}
+        </span>
       </span>
     </>
   );

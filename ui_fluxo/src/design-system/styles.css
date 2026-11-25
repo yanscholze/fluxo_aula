@@ -3856,6 +3856,19 @@ td strong {
     var(--motion-blue)
   );
 }
+.animated-value {
+  position: relative;
+  display: inline-block;
+  white-space: nowrap;
+}
+.animated-value-size {
+  visibility: hidden;
+}
+.animated-value-live {
+  position: absolute;
+  inset: 0;
+  contain: style;
+}
 .route-color-stage {
   position: fixed;
   inset: 0;
@@ -3881,6 +3894,14 @@ td strong {
   position: absolute;
   inset: 0;
   will-change: clip-path;
+}
+.route-color-stage[data-renderer="webgl"] .route-color-curtain {
+  will-change: auto;
+}
+.route-color-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .free-value,
 .free-link {

@@ -6,12 +6,15 @@ import { LazyMotion, domMax, MotionConfig } from "motion/react";
 import { router } from "./app/router";
 import { SyncDemo } from "./data/queries/use-demo";
 import "./design-system/styles.css";
+import { warmColorTransition } from "./motion/color-canvas";
 const client = new QueryClient({
   defaultOptions: {
     queries: { refetchOnWindowFocus: false, retry: false },
     mutations: { retry: false },
   },
 });
+if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+  warmColorTransition();
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={client}>
