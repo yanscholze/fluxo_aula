@@ -67,13 +67,13 @@ try {
     "SHOW COLUMNS FROM transactions LIKE 'account'",
   );
   if (columns[0]?.Type !== "varchar(64)") {
-    throw new Error("Execute database/02-referencias-de-contas.sql no MySQL.");
+    throw new Error("O banco tem um esquema incompatível. Para uma base nova, use database/01-banco.sql.");
   }
   try {
     await db.query("SELECT valor_origem_centavos FROM vw_lancamentos LIMIT 0");
   } catch (error) {
     if (error.code === "ER_NO_SUCH_TABLE") {
-      throw new Error("Execute database/03-recursos-academicos.sql no MySQL.");
+      throw new Error("A visão de lançamentos está ausente. Confira database/01-banco.sql.");
     }
     throw error;
   }

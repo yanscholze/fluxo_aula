@@ -1,6 +1,6 @@
 # Modelo de dados do Fluxo
 
-O Fluxo registra movimentações financeiras por usuário. A modelagem parte do MER simplificado e acompanha a estrutura criada ao executar os três scripts de `database` na ordem indicada no README. [Schema original](../database/Fluxo-MER-simplificado-MySQL.sql) · [Tipos de referências](../database/02-referencias-de-contas.sql) · [Extensões acadêmicas](../database/03-recursos-academicos.sql)
+O Fluxo registra movimentações financeiras por usuário. O modelo deriva do MER simplificado. Toda a estrutura, incluindo as chaves, os índices, a visão, a função, a procedure e os gatilhos, é criada em um único script. [01-banco.sql](../database/01-banco.sql)
 
 ## Modelo conceitual
 
@@ -89,14 +89,14 @@ erDiagram
     GRUPO_PARCELAMENTO |o..o{ LANCAMENTO : divide_compra
 ```
 
-No nível conceitual, lançamentos categorizados materializam a relação N:M entre contas e categorias:
+Uma conta pode ter despesas em várias categorias. A mesma categoria pode aparecer em despesas de várias contas. Essa relação N:M é registrada em `transactions`, uma linha por lançamento.
 
 ```mermaid
 erDiagram
     CONTA }o..o{ CATEGORIA : "vincula por lançamentos"
 ```
 
-`0..N` indica participação opcional com vários registros possíveis. `0..1` indica um vínculo opcional. `1..1` indica participação obrigatória no lado indicado.
+Leia a cardinalidade de cada lado da relação. Em **Usuário possui Conta**, um usuário pode começar com zero contas, mas cada conta precisa de um usuário. `0..N` indica zero ou muitos, `0..1` indica zero ou um e `1..1` indica exatamente um.
 
 | Relacionamento | Participação e cardinalidade |
 |---|---|
@@ -104,12 +104,13 @@ erDiagram
 | Conta e categoria (N:M) | Uma conta pode ter lançamentos de `0..N` categorias. Uma categoria pode classificar lançamentos de `0..N` contas. `transactions` representa essa associação e guarda data, valor e descrição do movimento. A combinação conta/categoria pode aparecer várias vezes, identificada por `transactions.id`. |
 | Lançamento tem conta de origem e de destino | Cada conta pode aparecer como origem em `0..N` lançamentos e como destino em `0..N`. Cada lançamento tem `0..1` conta de origem, `0..1` conta de destino e `0..1` categoria. A transferência exige duas contas distintas, uma em cada papel. |
 | Cartão tem lançamentos, recorrências, resgates, regras e capturas | Cada cartão pode ter `0..N` registros de cada tipo. Cada registro pode apontar para `0..1` cartão no banco. A interface exige o cartão na criação de um resgate. |
-| Viagem, lote e grupo agrupam lançamentos | Uma viagem, um lote ou um grupo pode agrupar `0..N` lançamentos. Cada lançamento pertence a `0..1` viagem, `0..1` lote e `0..1` grupo. Cada rótulo de parcelamento pertence a `1..1` grupo. |
+| Viagem, lote e grupo agrupam lançamentos | Uma viagem, um lote ou um grupo pode agrupar `0..N` lançamentos. Cada lançamento pertence a `0..1` viagem, `0..1` lote e `0..1` grupo. |
+| Grupo de parcelamento tem rótulo | Cada rótulo pertence a `1..1` grupo. O banco admite `0..N` rótulos por grupo. A API permite até um. |
 | Conta é vinculada a cartão, recorrência, resgate, regra ou captura | A conta pode aparecer em `0..N` registros de cada tipo. O vínculo é `0..1` em cada registro. Para cartão de débito, a aplicação exige conta vinculada. |
 | Categoria é sugerida ou definida por regra | A categoria pode aparecer em `0..N` recorrências, regras e capturas. A aplicação exige uma categoria em cada regra de estabelecimento e permite `0..1` nas demais. |
 | Feedback gera aviso | Um feedback pode originar `0..N` avisos. Cada aviso pode se referir a `0..1` feedback. |
 | Usuário tem perfil | Cada usuário pode ter `0..1` perfil adicional. Cada perfil pertence a `1..1` usuário. |
-| Lançamento gera auditoria | O trigger registra um evento a cada inclusão ou alteração de lançamento. Um lançamento pode ter `0..N` eventos e cada evento tem `1..1` lançamento. Registros anteriores à instalação dos gatilhos podem ter zero eventos. |
+| Lançamento gera auditoria | Cada evento pertence a `1..1` lançamento. A FK admite `0..N` eventos por lançamento. Os gatilhos registram o primeiro evento na inclusão e acrescentam um a cada alteração. |
 
 ## Modelo relacional
 
@@ -153,10 +154,10 @@ A API valida referências que o MER original armazenava sem FK, como `cards.link
 
 ## Normalização até a 3FN
 
-1. **Primeira forma normal (1FN).** Cada linha identifica uma entidade ou um evento. Estado, moeda, descrição, instante e valor ocupam campos próprios. Cada parcela possui o seu próprio lançamento. Os textos de origem e os dados de imagem são valores individuais usados como conteúdo.
-2. **Segunda forma normal (2FN).** Nas entidades com chave composta `(owner_id, id)`, o nome, o mês e a data de importação dependem do lote inteiro. A quantidade de parcelas depende do grupo inteiro. O identificador local é interpretado dentro do proprietário.
-3. **Terceira forma normal (3FN).** A estrutura separa os atributos que dependem de entidades diferentes. Em `transactions`, a conta e a categoria aparecem por referência. O nome da conta pertence a `accounts` e o nome da categoria pertence a `categories`. Eventos preservam fatos do momento em que ocorreram, por exemplo o nome do remetente no feedback ou a taxa aplicada à recompensa do lançamento.
+1. **Primeira forma normal (1FN).** Cada coluna guarda um valor. Uma compra de três parcelas gera três linhas de lançamento, cada uma com data, valor e situação próprios.
+2. **Segunda forma normal (2FN).** Os atributos de um lote ou grupo dependem da chave completa `(owner_id, id)`. O mesmo identificador local pode existir para usuários diferentes.
+3. **Terceira forma normal (3FN).** Cada fato é armazenado na entidade da qual depende. O nome da conta pertence a `accounts`, o da categoria a `categories` e o lançamento guarda as referências. Valores históricos, como a taxa usada para calcular pontos, pertencem ao evento em que foram registrados.
 
-No modelo original, `transactions` guardava `import_batch_name`, `import_batch_month` e `imported_at` em cada lançamento de um mesmo lote. A dependência era `transactions.id → (owner_id, import_batch_id) → metadados do lote`. A migração moveu esses campos para `import_batches`. Renomear um lote passou a exigir uma única atualização, e o lote pode existir mesmo sem lançamentos vinculados.
+O nome, a competência e a data de importação pertencem ao lote. Repeti-los em `transactions` criaria a dependência transitiva `id do lançamento → chave do lote → nome, competência e data`. Por isso, `import_batches` guarda esses dados uma vez e cada lançamento aponta para o seu lote. Corrigir o nome exige atualizar uma única linha.
 
-O mesmo princípio levou `installments` para `installment_groups`. A visão `vw_lancamentos` recupera a quantidade com `LEFT JOIN` e mostra uma parcela para movimentos avulsos. O valor com sinal é calculado pela função `fn_valor_movimento` na leitura da visão.
+Em `installment_groups`, uma linha guarda a quantidade total de parcelas. As três parcelas de **Passagens para Curitiba** no conjunto de demonstração apontam para o mesmo grupo. Cada parcela guarda a própria data e o próprio valor. A visão `vw_lancamentos` recupera a quantidade com `LEFT JOIN`, mostra uma parcela nos lançamentos avulsos e calcula o valor com sinal por meio da função `fn_valor_movimento`. [02-dados-demo.sql](../database/02-dados-demo.sql)

@@ -14,6 +14,17 @@ Abra [http://127.0.0.1:5174](http://127.0.0.1:5174) e entre com **demo@fluxo.loc
 
 O atalho usa o MySQL e o Node.js locais quando o ambiente portátil já está preparado. Nesse modo, os dados ficam em `${XDG_DATA_HOME:-$HOME/.local/share}/fluxo-aula` e **Ctrl+C** encerra a aplicação e o banco do Fluxo. Em outro computador com Docker Compose, o mesmo comando prepara o ambiente em contêineres e importa a conta de demonstração. Use `docker compose stop` para parar os contêineres.
 
+## Arquivos do banco
+
+```text
+database/
+├── 01-banco.sql           Cria toda a estrutura do MySQL.
+├── 02-dados-demo.sql      Carrega dados fictícios para a apresentação.
+└── 03-consultas-demo.sql  Demonstra consultas, índice, transação e auditoria.
+```
+
+Uma instalação nova precisa só do [01-banco.sql](database/01-banco.sql). Ele reúne as tabelas, chaves, restrições, índice, função, procedure, gatilhos e visão, em ordem de criação. Use os arquivos 02 e 03, nessa sequência, para a demonstração.
+
 ## Rodar com Docker
 
 Pré-requisito: Docker com o plugin Docker Compose. No terminal, abra a pasta `fluxo_aula` e execute:
@@ -22,32 +33,18 @@ Pré-requisito: Docker com o plugin Docker Compose. No terminal, abra a pasta `f
 docker compose up --build
 ```
 
-Quando o serviço indicar que o Fluxo está disponível, abra [http://127.0.0.1:5174](http://127.0.0.1:5174) e clique em **Criar uma conta**. O Compose prepara o MySQL e importa os scripts de estrutura na primeira inicialização do volume.
+Quando o serviço indicar que o Fluxo está disponível, abra [http://127.0.0.1:5174](http://127.0.0.1:5174) e clique em **Criar uma conta**. O Compose prepara o MySQL e importa `01-banco.sql` na primeira inicialização do volume.
 
 Para parar, use **Ctrl+C** no terminal ou `docker compose stop`. Os dados ficam no volume `fluxo-db`. Para mudar a porta publicada, defina `PORT` em um arquivo `.env` antes de subir o Compose.
 
-### Abrir com dados de apresentação
-
-Com o MySQL do Compose em execução, importe o perfil fictício uma vez:
-
-```bash
-docker compose exec -T db sh -c 'mysql -u root -p"$MYSQL_ROOT_PASSWORD"' < database/04-dados-de-apresentacao.sql
-```
-
-Entre com **demo@fluxo.local** e senha **FluxoDemo123!**. Para acompanhar os exemplos do roteiro, execute:
-
-```bash
-docker compose exec -T db sh -c 'mysql -u root -p"$MYSQL_ROOT_PASSWORD"' < database/05-consultas-de-apresentacao.sql
-```
+Para iniciar o Docker já com o perfil fictício, use `./APRESENTAR.sh`.
 
 ## Rodar com Node.js e MySQL instalados
 
-Pré-requisitos: Node.js 22.22.2 ou superior, npm e MySQL 8.0 atualizado ou 8.4. Use uma base nova para a instalação da estrutura. No terminal aberto em `fluxo_aula`, importe os três arquivos em ordem:
+Use Node.js 22.22.2 ou superior, npm e MySQL 8.4, a versão usada no projeto. No terminal aberto em `fluxo_aula`, use este comando para criar uma base nova:
 
 ```bash
-mysql -u root -p < database/Fluxo-MER-simplificado-MySQL.sql
-mysql -u root -p < database/02-referencias-de-contas.sql
-mysql -u root -p < database/03-recursos-academicos.sql
+mysql -u root -p < database/01-banco.sql
 ```
 
 Crie um usuário MySQL para a aplicação. Entre com `mysql -u root -p` e execute o SQL abaixo, substituindo a senha:
@@ -66,7 +63,12 @@ npm run build
 npm start
 ```
 
-Abra [http://127.0.0.1:5174](http://127.0.0.1:5174). Para carregar o perfil fictício, execute `mysql -u root -p < database/04-dados-de-apresentacao.sql`. As consultas do roteiro estão em `05-consultas-de-apresentacao.sql` e usam o mesmo comando de importação.
+Abra [http://127.0.0.1:5174](http://127.0.0.1:5174). Para carregar o perfil fictício e executar as consultas do roteiro, rode em ordem:
+
+```bash
+mysql -u root -p < database/02-dados-demo.sql
+mysql -u root -p < database/03-consultas-demo.sql
+```
 
 ## Como usar
 
@@ -79,7 +81,6 @@ Abra [http://127.0.0.1:5174](http://127.0.0.1:5174). Para carregar o perfil fict
 
 - `ui_fluxo/` guarda a interface React e o sistema visual. A interface faz requisições JSON à API no mesmo endereço.
 - `server/index.mjs` serve a interface compilada e a API Express. `auth.mjs` valida o usuário e persiste as sessões. `finance.mjs` valida as operações e `repository.mjs` lê os registros do usuário com consultas parametrizadas via `mysql2`.
-- `database/` contém o MER simplificado em SQL, o ajuste das seis referências de contas e a extensão acadêmica com normalização, visão, função, procedure, gatilhos, índice e auditoria. Os arquivos 04 e 05 são opcionais na instalação.
 - Valores monetários são guardados em centavos. Uma transferência registra a conta de origem e a de destino na mesma linha e atualiza o saldo calculado de cada uma. O banco valida a operação e grava sua auditoria na mesma transação.
 - Os dados financeiros de cada usuário ficam separados por titular. No painel, os totais em BRL usam lançamentos confirmados, enquanto os saldos individuais são exibidos na moeda de cada conta.
 

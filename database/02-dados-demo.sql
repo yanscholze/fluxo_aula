@@ -1,4 +1,4 @@
--- Dados fictícios opcionais. Execute após o esquema original e os scripts 02 e 03.
+-- 02. Dados fictícios para apresentar o Fluxo. Execute após 01-banco.sql.
 -- Acesso de apresentação: demo@fluxo.local / FluxoDemo123!
 -- As datas são relativas ao mês da primeira importação dos registros.
 -- Cada INSERT preserva os registros já existentes com o mesmo ID.

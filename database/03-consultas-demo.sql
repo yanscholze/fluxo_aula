@@ -1,4 +1,5 @@
--- Execute após 04-dados-de-apresentacao.sql. As operações usam apenas o perfil de apresentação.
+-- 03. Consultas para a apresentação. Execute após 02-dados-demo.sql.
+-- Os exemplos usam apenas o perfil fictício.
 USE fluxo_pessoal;
 
 SET @demo_owner = (

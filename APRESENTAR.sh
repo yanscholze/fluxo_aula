@@ -22,7 +22,7 @@ if [[ -f "$runtime/mysql-client.cnf" && -x "$runtime/bin/node" ]]; then
       echo "Inicie ./APRESENTAR.sh em outro terminal antes de executar as consultas." >&2
       exit 1
     fi
-    mysql_local --table < database/05-consultas-de-apresentacao.sql
+    mysql_local --table < database/03-consultas-demo.sql
     exit
   fi
 
@@ -81,14 +81,14 @@ if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
     docker compose exec -T db sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$@"' mysql "$@"
   }
   if [[ "${1:-}" == "--sql" ]]; then
-    docker_sql --table < database/05-consultas-de-apresentacao.sql
+    docker_sql --table < database/03-consultas-demo.sql
     exit
   fi
 
   docker compose up -d --build --wait
   demo=$(docker_sql --batch --skip-column-names --execute="SELECT 1 FROM fluxo_pessoal.users WHERE id = 'fluxo-aula-demo' AND email = 'demo@fluxo.local'")
   if [[ "$demo" != 1 ]]; then
-    docker_sql < database/04-dados-de-apresentacao.sql
+    docker_sql < database/02-dados-demo.sql
   fi
   address=$(docker compose port app 5174)
   echo "Fluxo disponível em http://$address."
