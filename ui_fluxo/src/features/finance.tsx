@@ -1,988 +1,868 @@
 import { useState } from "react";
-import { useLocation, useSearchParams, Link } from "react-router";
+import { Link } from "react-router";
+import { ArrowDownLeft, ArrowUpRight, Wallet } from "lucide-react";
 import {
-  Plus,
-  Wallet,
-  CreditCard,
-  ArrowUpRight,
-  ArrowLeftRight,
-  Landmark,
-  Pencil,
-  Archive,
-  CalendarDays,
-  Repeat,
-  Check,
-  ChevronRight,
-} from "lucide-react";
-import {
-  PageHeading,
-  Card,
-  Metric,
-  Button,
   Badge,
-  Progress,
-  Field,
+  Button,
+  Card,
   Confirm,
   Empty,
-  Notice,
-  IconButton,
+  Field,
+  Metric,
+  PageHeading,
 } from "../design-system/ui";
-import { useDemo, useCommand } from "../data/queries/use-demo";
-import { useApp } from "../app/context";
-import {
-  money,
-  inputMoney,
-  readMoney,
-  dateLabel,
-  monthLabel,
-} from "../shared/format";
-import { ActionDialog } from "./action-dialog";
-import {
-  AreaTabs,
-  planningTabs,
-  TransactionRows,
-  QuerySearch,
-  QuerySelect,
-} from "./common";
 import { Donut, LineChart } from "../charts/charts";
-import { anticipation } from "../data/demo/commands";
-import type { Account } from "../data/contracts/models";
-export default function Finance() {
-  const { pathname } = useLocation();
-  if (pathname === "/contas") return <Accounts />;
-  if (pathname === "/cartoes") return <Cards />;
-  if (pathname === "/recompensas") return <Rewards />;
-  if (pathname === "/orcamentos") return <Budgets />;
-  return <Planning />;
+import {
+  compact,
+  csvCell,
+  downloadFile,
+  monthLabel,
+  shortMonth,
+} from "../shared/format";
+import {
+  accountFields,
+  accountTypes,
+  cardFields,
+  cardTypes,
+  categoryFields,
+  categoryTypes,
+  labelOf,
+  labels,
+  longDate,
+  recurringFields,
+  today,
+  transactionFields,
+  transactionStatuses,
+  transactionTypes,
+} from "./finance-fields";
+import {
+  api,
+  formatAmount,
+  options,
+  RecordList,
+  recordName,
+  useRecords,
+  type Column,
+  type Row,
+} from "./records";
+
+function amount(row: Row) {
+  return Number(row.amount_cents ?? 0);
 }
-function Accounts() {
-  const { state: s, view: v } = useDemo();
-  const { edit } = useApp();
-  const cmd = useCommand();
-  const [reconcile, setReconcile] = useState<Account | null>(null);
-  const [params] = useSearchParams();
-  if (!s || !v) return null;
-  const accounts = v.accounts.filter(
-    (a) =>
-      !a.archivedAt &&
-      a.name.toLowerCase().includes((params.get("q") ?? "").toLowerCase()),
-  );
+
+function sum(rows: Row[], value = amount) {
+  return rows.reduce((total, row) => total + value(row), 0);
+}
+
+function textColumn(label: string, key: string): Column {
+  return { label, render: (row) => String(row[key] ?? "—") };
+}
+
+function statusBadge(status: unknown) {
   return (
-    <>
-      <PageHeading
-        title="Um lugar para cada plano."
-        description="Suas contas, reservas e saldos. Sempre em perspectiva."
-        action={
-          <>
-            <Button
-              variant="secondary"
-              onClick={() =>
-                edit({
-                  type: "transaction.save",
-                  title: "Transferir entre contas",
-                  initial: { kind: "transfer" },
-                })
-              }
-            >
-              <ArrowLeftRight size={16} />
-              Transferir
-            </Button>
-            <Button
-              onClick={() =>
-                edit({
-                  type: "account.save",
-                  title: "Nova conta",
-                  initial: { kind: "checking", openingBalance: "0" },
-                })
-              }
-            >
-              <Plus size={17} />
-              Nova conta
-            </Button>
-          </>
-        }
-      />
-      <div className="metric-grid three">
-        <Metric
-          label="Saldo atual"
-          value={v.position.currentBalance}
-          hint="Contas de uso diário em reais"
-          icon={<Wallet size={16} />}
-        />
-        <Metric
-          label="Guardado e investido"
-          value={v.position.investments}
-          hint="Reservas e planos de longo prazo"
-          icon={<Landmark size={16} />}
-          color="#315D99"
-        />
-        <Metric
-          label="Ativos totais"
-          value={v.position.totalAssets}
-          hint="Antes de descontar as dívidas"
-          icon={<ArrowUpRight size={16} />}
-          color="#A367C4"
-        />
-      </div>
-      <div className="toolbar">
-        <QuerySearch placeholder="Buscar conta" />
-      </div>
-      <div className="catalog-layout">
-        <div className="catalog-grid">
-          {accounts.map((a, i) => (
-            <Card className="account-card" key={a.id} index={i}>
-              <div className="catalog-top">
-                <span
-                  className="entity-symbol"
-                  style={{ color: a.color, background: a.color + "18" }}
-                >
-                  <Landmark size={21} />
-                </span>
-                <Badge>
-                  {a.kind === "investment"
-                    ? "Investimento"
-                    : a.kind === "benefit"
-                      ? "Benefício"
-                      : "Conta"}
-                </Badge>
-              </div>
-              <h2>{a.name}</h2>
-              <p>{a.institution}</p>
-              <strong className="catalog-value">
-                {money(a.balanceCents, a.currency)}
-              </strong>
-              <small>Saldo em 11 de novembro</small>
-              <div className="catalog-actions">
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    edit({
-                      type: "account.save",
-                      title: "Editar conta",
-                      id: a.id,
-                      initial: {
-                        name: a.name,
-                        institution: a.institution,
-                        kind: a.kind,
-                        currency: a.currency,
-                        openingBalance: inputMoney(a.openingBalance),
-                        color: a.color,
-                        includeInTotals: String(a.includeInTotals),
-                      },
-                    })
-                  }
-                >
-                  <Pencil size={14} />
-                  Editar
-                </Button>
-                <Button variant="ghost" onClick={() => setReconcile(a)}>
-                  Conferir saldo
-                </Button>
-                <Confirm
-                  label={"Arquivar " + a.name}
-                  title="Arquivar conta?"
-                  description="Contas protegidas ou com saldo não podem ser arquivadas."
-                  onConfirm={() =>
-                    cmd.mutateAsync({ type: "account.archive", id: a.id })
-                  }
-                >
-                  <Archive size={14} />
-                </Confirm>
-              </div>
-            </Card>
-          ))}
-        </div>
-        <Card title="Seu dinheiro distribuído" subtitle="Contas em reais">
-          <Donut
-            slices={v.accounts
-              .filter(
-                (a) =>
-                  !a.archivedAt && a.currency === "BRL" && a.balanceCents > 0,
-              )
-              .map((a) => ({
-                name: a.name,
-                value: a.balanceCents,
-                color: a.color,
-              }))}
-          />
-          <Notice>
-            Valores em outras moedas ficam fora dos totais em reais.
-          </Notice>
-        </Card>
-      </div>
-      {!accounts.length && <Empty />}
-      {reconcile && (
-        <ActionDialog
-          title="Conferir saldo"
-          description="Ajuste o saldo inicial da demonstração para conciliar o saldo observado."
-          onClose={() => setReconcile(null)}
-          onSubmit={(f) =>
-            cmd.mutateAsync({
-              type: "account.reconcile",
-              id: reconcile.id,
-              balanceCents: readMoney(String(f.get("balance"))),
-            })
-          }
-        >
-          <Field label="Saldo conferido">
-            <input
-              name="balance"
-              inputMode="decimal"
-              required
-              defaultValue={inputMoney(
-                v.accounts.find((a) => a.id === reconcile.id)!.balanceCents,
-              )}
-            />
-          </Field>
-        </ActionDialog>
-      )}
-    </>
+    <Badge
+      tone={
+        status === "confirmed"
+          ? "positive"
+          : status === "review"
+            ? "warning"
+            : "blue"
+      }
+    >
+      {labelOf(transactionStatuses, status)}
+    </Badge>
   );
 }
-function Cards() {
-  const { state: s, view: v } = useDemo();
-  const { edit } = useApp();
-  const cmd = useCommand();
-  const [params, setParams] = useSearchParams();
-  const [pay, setPay] = useState(false);
-  if (!s || !v) return null;
-  const cards = v.cards.filter((c) => !c.archived);
-  const card = cards.find((c) => c.id === params.get("cartao")) ?? cards[0];
-  if (!card)
-    return (
-      <>
-        <PageHeading
-          title="Cartões e faturas"
-          description="Separe o que comprou do que já pagou."
-          action={
-            <Button
-              onClick={() => edit({ type: "card.save", title: "Novo cartão" })}
-            >
-              Novo cartão
-            </Button>
-          }
-        />
-        <Empty />
-      </>
-    );
-  const competence = params.get("competencia") ?? card.competence;
-  const invoice = card.invoices.find((i) => i.competence === competence) ?? {
-    outstanding: 0,
-    charges: 0,
-    payments: 0,
-    dueOn: s.today,
+
+function currencyOf(accounts: Row[], row: Row) {
+  const account = accounts.find((account) => account.id === row.account);
+  return String(account?.currency_code || "BRL");
+}
+
+function currentBalances(
+  accounts: Row[],
+  transactions: Row[],
+  redemptions: Row[],
+) {
+  const date = today();
+  const balances = new Map(
+    accounts.map((row) => [row.id, Number(row.balance_cents ?? 0)]),
+  );
+  const apply = (account: unknown, change: number) => {
+    const id = String(account);
+    if (balances.has(id)) balances.set(id, balances.get(id)! + change);
   };
-  const rows = s.transactions.filter(
-    (t) =>
-      ((t.origin.kind === "card" && t.origin.cardId === card.id) ||
-        (t.destination?.kind === "card" && t.destination.cardId === card.id)) &&
-      t.competence === competence,
-  );
-  return (
-    <>
-      <PageHeading
-        title="No crédito. Sob controle."
-        description="Cada compra na sua fatura, cada pagamento no lugar certo."
-        action={
-          <Button
-            onClick={() => edit({ type: "card.save", title: "Novo cartão" })}
-          >
-            <Plus size={17} />
-            Novo cartão
-          </Button>
-        }
-      />
-      <div className="credit-layout">
-        <Card className="credit-selector">
-          <div
-            className="credit-face"
-            style={{
-              background: `linear-gradient(130deg, ${card.color}, #273E48)`,
-            }}
-          >
-            <span>
-              fluxo <CreditCard size={24} />
-            </span>
-            <div className="chip" />
-            <strong>{card.name}</strong>
-            <b>•••• &nbsp; •••• &nbsp; •••• &nbsp; {card.last4}</b>
-            <small>
-              {s.profile.name.toUpperCase()} <span>mastercard</span>
-            </small>
-          </div>
-          <div className="credit-picker">
-            {cards.map((c) => (
-              <button
-                key={c.id}
-                className={c.id === card.id ? "active" : ""}
-                onClick={() => {
-                  setParams({ cartao: c.id });
-                }}
-              >
-                {c.name}
-              </button>
-            ))}
-          </div>
-          <div className="catalog-actions">
-            <Button
-              variant="ghost"
-              onClick={() =>
-                edit({
-                  type: "card.save",
-                  title: "Editar cartão",
-                  id: card.id,
-                  initial: {
-                    name: card.name,
-                    last4: card.last4,
-                    closingDay: String(card.closingDay),
-                    dueDay: String(card.dueDay),
-                    limit: inputMoney(card.limitCents),
-                    color: card.color,
-                  },
-                })
-              }
-            >
-              <Pencil size={14} />
-              Editar
-            </Button>
-            <Confirm
-              label="Arquivar cartão"
-              title="Arquivar cartão?"
-              description="É necessário quitar todas as competências antes de arquivar."
-              onConfirm={() =>
-                cmd.mutateAsync({ type: "card.archive", id: card.id })
-              }
-            >
-              <Archive size={14} />
-              Arquivar
-            </Confirm>
-            <Link className="text-link" to="/recompensas">
-              Meus pontos <ChevronRight size={14} />
-            </Link>
-          </div>
-        </Card>
-        <Card
-          title="Sua fatura"
-          subtitle="Selecione a competência para conferir"
-        >
-          <label className="field">
-            <span>Competência da fatura</span>
-            <select
-              value={competence}
-              onChange={(e) => {
-                const next = new URLSearchParams(params);
-                next.set("cartao", card.id);
-                next.set("competencia", e.target.value);
-                setParams(next);
-              }}
-            >
-              {[
-                ...new Set([
-                  ...card.invoices.map((i) => i.competence),
-                  card.competence,
-                ]),
-              ]
-                .sort()
-                .reverse()
-                .map((c) => (
-                  <option key={c} value={c}>
-                    {monthLabel(c)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <strong className="hero-value">{money(invoice.outstanding)}</strong>
-          <Badge
-            tone={
-              invoice.outstanding === 0
-                ? "positive"
-                : invoice.dueOn < s.today
-                  ? "negative"
-                  : "warning"
-            }
-          >
-            {invoice.outstanding === 0
-              ? "Sem valor em aberto"
-              : invoice.dueOn < s.today
-                ? "Fatura vencida"
-                : "Em aberto"}
-          </Badge>
-          <div className="key-values">
-            <div>
-              <span>Compras da competência</span>
-              <b>{money(invoice.charges)}</b>
-            </div>
-            <div>
-              <span>Pagamentos e créditos</span>
-              <b>{money(invoice.payments)}</b>
-            </div>
-            <div>
-              <span>Vencimento</span>
-              <b>{dateLabel(invoice.dueOn)}</b>
-            </div>
-            <div>
-              <span>Limite disponível</span>
-              <b>{money(card.availableCents)}</b>
-            </div>
-          </div>
-          <Progress
-            value={card.limitCents - card.availableCents}
-            total={card.limitCents}
-            color={card.color}
-            label="Limite utilizado"
-          />
-          <Button
-            disabled={invoice.outstanding === 0}
-            onClick={() => setPay(true)}
-          >
-            Simular pagamento <ArrowUpRight size={16} />
-          </Button>
-        </Card>
-      </div>
-      <Card
-        title="Movimentos desta fatura"
-        subtitle="O pagamento reduz a dívida; não cria uma nova despesa."
-      >
-        {rows.length ? (
-          <TransactionRows rows={rows} />
-        ) : (
-          <Empty title="Nenhuma compra nesta competência" />
-        )}
-      </Card>
-      {pay && (
-        <ActionDialog
-          title="Pagar fatura na demonstração"
-          description="O pagamento simulado reduz o saldo da conta e a dívida do cartão, sem duplicar a despesa."
-          onClose={() => setPay(false)}
-          onSubmit={(f) =>
-            cmd.mutateAsync({
-              type: "invoice.pay",
-              cardId: card.id,
-              competence,
-              accountId: String(f.get("account")),
-              amountCents: readMoney(String(f.get("amount"))),
-            })
-          }
-        >
-          <Field label="Conta de pagamento">
-            <select name="account">
-              {s.accounts
-                .filter(
-                  (a) =>
-                    !a.archivedAt &&
-                    a.currency === "BRL" &&
-                    ["checking", "cash"].includes(a.kind),
-                )
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-            </select>
-          </Field>
-          <Field label="Valor do pagamento">
-            <input
-              name="amount"
-              inputMode="decimal"
-              required
-              defaultValue={inputMoney(invoice.outstanding)}
-            />
-          </Field>
-        </ActionDialog>
-      )}
-    </>
-  );
+  for (const row of transactions) {
+    if (
+      row.status !== "confirmed" ||
+      String(row.occurred_at).slice(0, 10) > date
+    )
+      continue;
+    apply(row.account, Number(row.valor_origem_centavos));
+    if (row.type === "transfer") apply(row.destination_account, amount(row));
+  }
+  for (const row of redemptions) {
+    if (
+      row.kind === "cashback" &&
+      String(row.redeemed_at).slice(0, 10) <= date
+    ) {
+      apply(row.account, Math.round(Number(row.amount_milli) / 10));
+    }
+  }
+  return balances;
 }
-function Planning() {
-  const { state: s, view: v } = useDemo();
-  const { edit, notify } = useApp();
-  const cmd = useCommand();
-  const { pathname } = useLocation();
-  const subscriptions = pathname === "/assinaturas",
-    installments = pathname === "/parcelamentos";
-  const [preview, setPreview] = useState<{
-    planId: string;
-    count: number;
-  } | null>(null);
-  if (!s || !v) return null;
-  const rules = s.recurrences.filter((r) =>
-    subscriptions ? r.role === "subscription" : r.role !== "subscription",
-  );
-  const plans = [
-    ...new Set(
-      s.transactions
-        .map((t) => t.installmentPlanId)
-        .filter((x): x is string => Boolean(x)),
-    ),
+
+function transactionColumns(data: Record<string, Row[]>): Column[] {
+  return [
+    { label: "Descrição", render: (row) => <strong>{row.description}</strong> },
+    { label: "Data", render: (row) => longDate(row.occurred_at) },
+    { label: "Tipo", render: (row) => labelOf(transactionTypes, row.type) },
+    {
+      label: "Categoria",
+      render: (row) => recordName(data.categories, row.category),
+    },
+    {
+      label: "Conta ou cartão",
+      render: (row) =>
+        row.type === "transfer"
+          ? `${recordName(data.accounts, row.account)} → ${recordName(data.accounts, row.destination_account)}`
+          : recordName(
+              row.card_id ? data.cards : data.accounts,
+              row.card_id || row.account,
+            ),
+    },
+    {
+      label: "Valor",
+      render: (row) => (
+        <span className="nowrap">
+          {formatAmount(amount(row), currencyOf(data.accounts, row))}
+        </span>
+      ),
+    },
+    { label: "Situação", render: (row) => statusBadge(row.status) },
   ];
-  const simulation = preview
-    ? anticipation(s, preview.planId, preview.count)
-    : null;
+}
+
+function MonthField({
+  month,
+  onChange,
+}: {
+  month: string;
+  onChange: (month: string) => void;
+}) {
   return (
-    <>
-      <PageHeading
-        title={
-          subscriptions
-            ? "O que se repete, à vista."
-            : installments
-              ? "Uma parcela de cada vez."
-              : "Hoje tranquilo. Amanhã planejado."
-        }
-        description={
-          subscriptions
-            ? "Assinaturas e serviços que fazem parte do seu mês."
-            : installments
-              ? "Acompanhe as compras parceladas e simule a antecipação."
-              : "Seus compromissos, organizados ao longo do tempo."
-        }
-        action={
-          <Button
-            onClick={() =>
-              edit({
-                type: installments ? "transaction.save" : "recurrence.save",
-                title: installments
-                  ? "Nova compra parcelada"
-                  : subscriptions
-                    ? "Nova assinatura"
-                    : "Novo compromisso",
-                initial: installments
-                  ? {
-                      kind: "expense",
-                      origin: "card:card-nu",
-                      installments: "3",
-                    }
-                  : {
-                      role: subscriptions ? "subscription" : "standard",
-                      day: "15",
-                      kind: "expense",
-                    },
-              })
-            }
-          >
-            <Plus size={17} />
-            {installments
-              ? "Nova compra"
-              : subscriptions
-                ? "Nova assinatura"
-                : "Novo compromisso"}
-          </Button>
-        }
+    <Field label="Competência">
+      <input
+        type="month"
+        value={month}
+        onChange={(event) => {
+          if (event.target.value) onChange(event.target.value);
+        }}
       />
-      <AreaTabs items={planningTabs} />
-      {installments ? (
-        <div className="catalog-grid">
-          {plans.map((planId) => {
-            const rows = s.transactions.filter(
-                (t) => t.installmentPlanId === planId,
-              ),
-              future = rows.filter((t) => t.state === "planned");
-            const total = rows.reduce((a, t) => a + t.amount, 0);
-            return (
-              <Card
-                key={planId}
-                title={rows[0].description}
-                subtitle={`${rows.length} parcelas no histórico`}
-              >
-                <strong className="catalog-value">{money(total)}</strong>
-                <Progress
-                  value={rows.length - future.length}
-                  total={rows.length}
-                  label="Parcelas já cobradas"
-                />
-                <p>
-                  {future.length} parcelas futuras ·{" "}
-                  {money(future.reduce((a, t) => a + t.amount, 0))}
-                </p>
-                <details className="disclosure">
-                  <summary>Ver cronograma</summary>
-                  {rows.map((t) => (
-                    <div className="key-row" key={t.id}>
-                      <span>
-                        {t.installmentNumber} · {monthLabel(t.competence)}
-                      </span>
-                      <b>{money(t.amount)}</b>
-                      <Badge>
-                        {t.state === "planned" ? "Futura" : "Cobrada"}
-                      </Badge>
-                    </div>
-                  ))}
-                </details>
-                <Button
-                  variant="secondary"
-                  disabled={!future.length}
-                  onClick={() => setPreview({ planId, count: future.length })}
-                >
-                  Simular antecipação
-                </Button>
-              </Card>
-            );
-          })}
-        </div>
-      ) : (
-        <>
-          <div className="metric-grid three">
-            <Metric
-              label={subscriptions ? "Custo mensal" : "Entradas previstas"}
-              value={
-                subscriptions
-                  ? rules
-                      .filter((r) => r.isActive)
-                      .reduce((a, r) => a + r.amount, 0)
-                  : v.cashflow[0].inflow
-              }
-              hint={
-                subscriptions
-                  ? "Assinaturas ativas"
-                  : "Projeção, não saldo disponível"
-              }
-              icon={<Repeat size={17} />}
-            />
-            <Metric
-              label="Comprometido no ciclo"
-              value={v.position.committed}
-              hint="Faturas e contas previstas"
-              icon={<CalendarDays size={17} />}
-              color="#315D99"
-            />
-            <Metric
-              label="Folga projetada"
-              value={v.position.freeToSpend.amount}
-              hint="Dentro do ciclo do cartão principal"
-              icon={<Wallet size={17} />}
-              color="#A367C4"
-            />
-          </div>
-          {!subscriptions && (
-            <Card
-              title="O horizonte dos próximos meses"
-              subtitle="Projeções derivadas dos compromissos conhecidos"
-            >
-              <LineChart
-                labels={v.cashflow.map((p) => monthLabel(p.competence))}
-                series={[
-                  {
-                    name: "Saldo projetado",
-                    values: v.cashflow.map((p) => p.projectedBalance),
-                    color: "#518FF1",
-                    projected: true,
-                  },
-                ]}
-                area
-              />
-            </Card>
-          )}
-          <div className="catalog-grid">
-            {rules.map((r) => {
-              const confirmed = s.transactions.some(
-                (t) =>
-                  t.recurrenceId === r.id &&
-                  t.occurredOn.slice(0, 7) === s.today.slice(0, 7),
-              );
-              return (
-                <Card
-                  key={r.id}
-                  title={r.description}
-                  subtitle={`Todo dia ${r.scheduleDay}`}
-                >
-                  <Badge tone={r.isActive ? "positive" : "neutral"}>
-                    {r.isActive ? "Ativa" : "Pausada"}
-                  </Badge>
-                  <strong className="catalog-value">{money(r.amount)}</strong>
-                  <p>
-                    {r.cardId
-                      ? s.cards.find((c) => c.id === r.cardId)?.name
-                      : s.accounts.find((a) => a.id === r.accountId)?.name}
-                  </p>
-                  <div className="catalog-actions">
-                    <Button
-                      variant="secondary"
-                      disabled={!r.isActive || confirmed || cmd.isPending}
-                      onClick={() =>
-                        void cmd
-                          .mutateAsync({
-                            type: "recurrence.confirm",
-                            id: r.id,
-                            month: s.today.slice(0, 7),
-                          })
-                          .then(() => notify("Ocorrência confirmada"))
-                          .catch((e) => notify(e.message))
-                      }
-                    >
-                      <Check size={15} />
-                      {confirmed ? "Confirmada" : "Confirmar mês"}
-                    </Button>
-                    <IconButton
-                      label={"Editar " + r.description}
-                      onClick={() =>
-                        edit({
-                          type: "recurrence.save",
-                          id: r.id,
-                          title: "Editar compromisso",
-                          initial: {
-                            description: r.description,
-                            amount: inputMoney(r.amount),
-                            kind: r.kind,
-                            role: r.role,
-                            day: String(r.scheduleDay),
-                            categoryId: r.categoryId ?? "",
-                            origin: r.cardId
-                              ? "card:" + r.cardId
-                              : "account:" + r.accountId,
-                            startsOn: r.startsOn,
-                          },
-                        })
-                      }
-                    >
-                      <Pencil size={15} />
-                    </IconButton>
-                    <Button
-                      variant="ghost"
-                      onClick={() =>
-                        void cmd
-                          .mutateAsync({ type: "recurrence.toggle", id: r.id })
-                          .catch((e) => notify(e.message))
-                      }
-                    >
-                      {r.isActive ? "Pausar" : "Retomar"}
-                    </Button>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        </>
-      )}
-      {preview && simulation && (
-        <ActionDialog
-          title="Antecipação sem juros"
-          description="A compra demonstrativa não contém juros. Antecipar move parcelas futuras para a fatura atual; pagar a fatura é uma ação separada."
-          onClose={() => setPreview(null)}
-          onSubmit={() =>
-            cmd.mutateAsync({ type: "installment.anticipate", ...preview })
-          }
-        >
-          <Field label="Quantidade de parcelas">
-            <input
-              type="number"
-              min={1}
-              max={
-                s.transactions.filter(
-                  (t) =>
-                    t.installmentPlanId === preview.planId &&
-                    t.state === "planned",
-                ).length
-              }
-              value={preview.count}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (
-                  n >= 1 &&
-                  n <=
-                    s.transactions.filter(
-                      (t) =>
-                        t.installmentPlanId === preview.planId &&
-                        t.state === "planned",
-                    ).length
-                )
-                  setPreview({ ...preview, count: n });
-              }}
-            />
-          </Field>
-          <div className="key-values">
-            <div>
-              <span>Valor a antecipar</span>
-              <b>{money(simulation.amountDueToday)}</b>
-            </div>
-            <div>
-              <span>Economia de juros</span>
-              <b>{money(simulation.savings)}</b>
-            </div>
-          </div>
-        </ActionDialog>
-      )}
-    </>
+    </Field>
   );
 }
-function Budgets() {
-  const { state: s, view: v } = useDemo();
-  const { edit } = useApp();
-  const [params] = useSearchParams();
-  if (!s || !v) return null;
-  const month = params.get("mes") || "2026-11";
-  const rows = v.budgets.filter((b) => b.month === month);
+
+export function Transactions() {
+  const { data } = useRecords();
+  const [search, setSearch] = useState("");
+  const [month, setMonth] = useState("");
+  const [type, setType] = useState("");
+  const [status, setStatus] = useState("");
+  const visible = data.transactions.filter(
+    (row) =>
+      (!month || String(row.occurred_at).startsWith(month)) &&
+      (!type || row.type === type) &&
+      (!status || row.status === status) &&
+      String(row.description)
+        .toLocaleLowerCase("pt-BR")
+        .includes(search.trim().toLocaleLowerCase("pt-BR")),
+  );
+  const columns = transactionColumns(data);
+
+  function exportCsv() {
+    const header = [
+      "Descrição",
+      "Data",
+      "Tipo",
+      "Valor em centavos",
+      "Moeda",
+      "Situação",
+    ];
+    const lines = visible.map((row) => [
+      row.description,
+      row.occurred_at,
+      labelOf(transactionTypes, row.type),
+      amount(row),
+      currencyOf(data.accounts, row),
+      labelOf(transactionStatuses, row.status),
+    ]);
+    downloadFile(
+      "fluxo-lancamentos.csv",
+      "\uFEFF" +
+        [header, ...lines]
+          .map((line) => line.map(csvCell).join(";"))
+          .join("\r\n"),
+      "text/csv;charset=utf-8",
+    );
+  }
+
   return (
     <>
       <PageHeading
-        title="Limites que dão liberdade."
-        description="Escolha suas prioridades e acompanhe cada categoria."
+        title="Lançamentos"
+        description="Registre receitas, despesas, transferências e pagamentos de fatura."
         action={
           <Button
-            onClick={() =>
-              edit({
-                type: "budget.save",
-                title: "Novo orçamento",
-                initial: { month },
-              })
-            }
+            variant="secondary"
+            onClick={exportCsv}
+            disabled={!visible.length}
           >
-            <Plus size={17} />
-            Definir orçamento
+            Exportar CSV
           </Button>
         }
       />
       <div className="toolbar">
-        <QuerySelect
-          name="mes"
-          label="Competência"
-          defaultValue="2026-11"
-          options={v.historical
-            .slice()
-            .reverse()
-            .map((h) => ({ value: h.month, label: monthLabel(h.month) }))}
-        />
-      </div>
-      <div className="metric-grid three">
-        <Metric
-          label="Planejado"
-          value={rows.reduce((a, b) => a + b.limitCents, 0)}
-          hint="Limites das categorias"
-          icon={<Wallet size={17} />}
-        />
-        <Metric
-          label="Utilizado"
-          value={rows.reduce((a, b) => a + b.spent, 0)}
-          hint="Despesas confirmadas"
-          icon={<CreditCard size={17} />}
-          color="#315D99"
-        />
-        <Metric
-          label="Margem restante"
-          value={rows.reduce((a, b) => a + b.limitCents - b.spent, 0)}
-          hint="Pode ser negativa ao exceder"
-          icon={<Landmark size={17} />}
-          color="#A367C4"
-        />
-      </div>
-      <div className="catalog-grid">
-        {rows.map((b) => (
-          <Card
-            key={b.id}
-            title={b.category?.name}
-            action={
-              <IconButton
-                label={"Editar orçamento de " + b.category?.name}
-                onClick={() =>
-                  edit({
-                    type: "budget.save",
-                    id: b.id,
-                    title: "Editar orçamento",
-                    initial: {
-                      categoryId: b.categoryId,
-                      limit: inputMoney(b.limitCents),
-                      month: b.month,
-                    },
-                  })
-                }
-              >
-                <Pencil size={16} />
-              </IconButton>
-            }
+        <Field label="Buscar descrição">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </Field>
+        <Field label="Mês">
+          <input
+            type="month"
+            value={month}
+            onChange={(event) => setMonth(event.target.value)}
+          />
+        </Field>
+        <Field label="Tipo">
+          <select
+            value={type}
+            onChange={(event) => setType(event.target.value)}
           >
-            <Badge tone={b.spent > b.limitCents ? "negative" : "positive"}>
-              {b.spent > b.limitCents
-                ? "Limite ultrapassado"
-                : "Dentro do planejado"}
-            </Badge>
-            <strong className="catalog-value">{money(b.spent)}</strong>
-            <p>de {money(b.limitCents)} planejados</p>
-            <Progress
-              value={b.spent}
-              total={b.limitCents}
-              color={
-                b.spent > b.limitCents ? "var(--negative)" : b.category?.color
-              }
-              label={"Uso do orçamento " + b.category?.name}
-            />
-            <p>{Math.round((b.spent / b.limitCents) * 100)}% utilizado</p>
-            <Link
-              className="text-link"
-              to={`/lancamentos?categoria=${b.categoryId}&mes=${month}`}
-            >
-              Ver lançamentos <ChevronRight size={14} />
-            </Link>
-          </Card>
-        ))}
+            <option value="">Todos</option>
+            {labels(transactionTypes).map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Situação">
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value)}
+          >
+            <option value="">Todas</option>
+            {labels(transactionStatuses).map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </Field>
       </div>
-      {!rows.length && (
-        <Empty
-          title="Ainda sem orçamento neste mês"
-          description="Defina os limites que fazem sentido para você."
-        />
-      )}
+      <RecordList
+        title="Movimentações"
+        resource="transactions"
+        singular="lançamento"
+        records={visible}
+        fields={transactionFields(data)}
+        columns={columns}
+        wide
+      />
     </>
   );
 }
-function Rewards() {
-  const { state: s } = useDemo();
-  const { edit } = useApp();
-  if (!s) return null;
+
+export function Accounts() {
+  const { data } = useRecords();
+  const balances = currentBalances(
+    data.accounts,
+    data.transactions,
+    data.reward_redemptions,
+  );
   return (
     <>
       <PageHeading
-        title="Pequenas recompensas."
-        description="Pontos são pontos. Eles não se misturam ao seu saldo financeiro."
+        title="Contas"
+        description="Cadastre contas e acompanhe os saldos a partir dos lançamentos confirmados."
+      />
+      <RecordList
+        title="Suas contas"
+        resource="accounts"
+        singular="conta"
+        records={data.accounts}
+        fields={accountFields}
+        wide
+        columns={[
+          textColumn("Nome", "name"),
+          {
+            label: "Saldo atual",
+            render: (row) =>
+              formatAmount(
+                balances.get(row.id),
+                String(row.currency_code ?? "BRL"),
+              ),
+          },
+          { label: "Tipo", render: (row) => labelOf(accountTypes, row.kind) },
+          textColumn("Instituição", "institution"),
+          {
+            label: "Meta",
+            render: (row) =>
+              row.goal_cents == null
+                ? "—"
+                : formatAmount(
+                    row.goal_cents,
+                    String(row.currency_code ?? "BRL"),
+                  ),
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+export function Categories() {
+  const { data } = useRecords();
+  return (
+    <>
+      <PageHeading
+        title="Categorias"
+        description="Organize suas receitas e despesas para acompanhar de onde vem e para onde vai o dinheiro."
+      />
+      <RecordList
+        title="Suas categorias"
+        resource="categories"
+        singular="categoria"
+        records={data.categories}
+        fields={categoryFields}
+        columns={[
+          textColumn("Nome", "name"),
+          { label: "Tipo", render: (row) => labelOf(categoryTypes, row.kind) },
+          {
+            label: "Essencial",
+            render: (row) => (row.essential ? "Sim" : "Não"),
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+export function Cards() {
+  const { data } = useRecords();
+  const [month, setMonth] = useState(today().slice(0, 7));
+  const invoice = (card: Row) => {
+    const rows = data.transactions.filter(
+      (row) =>
+        row.card_id === card.id &&
+        row.invoice_month === month &&
+        row.status !== "review",
+    );
+    const purchases = sum(
+      rows.filter((row) => row.type === "expense" || row.type === "refund"),
+      (row) => (row.type === "refund" ? -amount(row) : amount(row)),
+    );
+    const paid = sum(
+      rows.filter(
+        (row) => row.type === "invoice_payment" && row.status === "confirmed",
+      ),
+    );
+    return { purchases, paid };
+  };
+  return (
+    <>
+      <PageHeading
+        title="Cartões"
+        description="Acompanhe cartões de débito e crédito e confira suas faturas por competência."
         action={
-          <Button
-            onClick={() =>
-              edit({
-                type: "reward.save",
-                title: "Movimentar pontos",
-                initial: { kind: "earn" },
-              })
-            }
-          >
-            <Plus size={17} />
-            Movimentar pontos
-          </Button>
+          <Link to="/recompensas" className="button secondary">
+            Ver recompensas
+          </Link>
         }
       />
-      <div className="catalog-grid">
-        {s.cards.map((c) => (
-          <Card title={c.name} key={c.id}>
-            <strong className="hero-value">
-              {s.rewards
-                .filter((r) => r.cardId === c.id)
-                .reduce((a, r) => a + r.points, 0)
-                .toLocaleString("pt-BR")}
-            </strong>
-            <p>pontos disponíveis</p>
-            <Button
-              variant="secondary"
-              onClick={() =>
-                edit({
-                  type: "reward.save",
-                  title: "Resgatar pontos",
-                  initial: { kind: "redeem", cardId: c.id },
-                })
-              }
+      <div className="record-stack">
+        <RecordList
+          title="Seus cartões"
+          resource="cards"
+          singular="cartão"
+          records={data.cards}
+          fields={cardFields(data)}
+          wide
+          columns={[
+            {
+              label: "Cartão",
+              render: (row) => (
+                <strong>
+                  {row.name}
+                  {row.last4 ? ` • ${row.last4}` : ""}
+                </strong>
+              ),
+            },
+            { label: "Tipo", render: (row) => labelOf(cardTypes, row.kind) },
+            textColumn("Bandeira", "brand"),
+            {
+              label: "Conta vinculada",
+              render: (row) => recordName(data.accounts, row.linked_account),
+            },
+            {
+              label: "Limite",
+              render: (row) =>
+                row.limit_cents == null ? "—" : formatAmount(row.limit_cents),
+            },
+          ]}
+        />
+        <Card
+          title="Faturas de crédito"
+          subtitle="Registre pagamentos na tela Lançamentos, escolhendo o tipo Pagamento de fatura."
+          action={<MonthField month={month} onChange={setMonth} />}
+        >
+          {data.cards.some((row) => row.kind === "credit") ? (
+            <div
+              className="table-scroll"
+              tabIndex={0}
+              role="region"
+              aria-label="Faturas de crédito"
             >
-              Resgatar pontos
-            </Button>
-          </Card>
-        ))}
+              <table>
+                <thead>
+                  <tr>
+                    {[
+                      "Cartão",
+                      "Fechamento / vencimento",
+                      "Compras líquidas",
+                      "Valor pago",
+                      "Saldo da fatura",
+                    ].map((label) => (
+                      <th key={label}>{label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.cards
+                    .filter((row) => row.kind === "credit")
+                    .map((card) => {
+                      const { purchases, paid } = invoice(card);
+                      return (
+                        <tr key={card.id}>
+                          <td>{card.name}</td>
+                          <td>
+                            {card.closing_day} / {card.due_day}
+                          </td>
+                          <td>{formatAmount(purchases)}</td>
+                          <td>{formatAmount(paid)}</td>
+                          <td>{formatAmount(purchases - paid)}</td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty
+              title="Nenhum cartão de crédito"
+              description="Cadastre um cartão de crédito para visualizar as faturas."
+            />
+          )}
+        </Card>
       </div>
-      <Card title="Histórico de pontos">
-        {s.rewards.map((r) => (
-          <div className="key-row" key={r.id}>
-            <span>{r.description}</span>
-            <small>{dateLabel(r.date)}</small>
-            <strong>
-              {r.points > 0 ? "+" : ""}
-              {r.points}
-            </strong>
-          </div>
-        ))}
-      </Card>
+    </>
+  );
+}
+
+export function Commitments() {
+  const { data, reload, notify } = useRecords();
+  const [month, setMonth] = useState(today().slice(0, 7));
+  return (
+    <>
+      <PageHeading
+        title="Compromissos"
+        description="Cadastre despesas fixas, assinaturas e receitas recorrentes. Confirme cada competência para efetivar o lançamento."
+        action={<MonthField month={month} onChange={setMonth} />}
+      />
+      <RecordList
+        title="Recorrências"
+        resource="recurring_entries"
+        singular="compromisso"
+        records={data.recurring_entries}
+        fields={recurringFields(data)}
+        wide
+        columns={[
+          textColumn("Descrição", "description"),
+          textColumn("Dia", "day_of_month"),
+          {
+            label: "Valor-base",
+            render: (row) =>
+              formatAmount(amount(row), currencyOf(data.accounts, row)),
+          },
+          { label: "Tipo", render: (row) => labelOf(categoryTypes, row.type) },
+          {
+            label: "Situação",
+            render: (row) => (
+              <Badge tone={row.active ? "positive" : "neutral"}>
+                {row.active ? "Ativo" : "Pausado"}
+              </Badge>
+            ),
+          },
+        ]}
+        actions={(row) =>
+          row.active &&
+          (row.last_confirmed_month === month ? (
+            <Badge tone="positive">Confirmado no mês</Badge>
+          ) : (
+            <Confirm
+              label="Confirmar mês"
+              title="Confirmar compromisso"
+              description={`Gerar um lançamento para ${monthLabel(month)}?`}
+              onConfirm={async () => {
+                await api(
+                  `/recurring_entries/${encodeURIComponent(row.id)}/confirm`,
+                  "POST",
+                  { month },
+                );
+                await reload();
+                notify("Lançamento confirmado.");
+              }}
+            />
+          ))
+        }
+      />
+    </>
+  );
+}
+
+export function Installments() {
+  const { data, reload, notify } = useRecords();
+  const groups = new Map<string, Row[]>();
+  for (const row of data.transactions) {
+    if (!row.installment_group_id) continue;
+    const key = String(row.installment_group_id);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+  const groupRows = [...groups].map(([id, rows]) => {
+    const first = rows[0];
+    return {
+      id,
+      name: first.description,
+      count: first.installments,
+      total: sum(rows),
+      planned: sum(rows.filter((row) => row.status === "planned")),
+      currency: currencyOf(data.accounts, first),
+    };
+  });
+  const installmentRows = [...groups.values()]
+    .flat()
+    .sort((a, b) => String(a.occurred_at).localeCompare(String(b.occurred_at)));
+  const groupName = (group: unknown) =>
+    data.installment_labels.find((row) => row.group_id === group)?.label ??
+    recordName(groupRows, group);
+
+  return (
+    <>
+      <PageHeading
+        title="Parcelamentos"
+        description="Veja os grupos e confirme parcelas planejadas quando forem efetivadas."
+        action={
+          <Link to="/lancamentos" className="button secondary">
+            Ir para lançamentos
+          </Link>
+        }
+      />
+      <div className="record-stack">
+        <RecordList
+          title="Compras parceladas"
+          resource="installment_groups"
+          records={groupRows}
+          singular="grupo"
+          columns={[
+            { label: "Grupo", render: (row) => groupName(row.id) },
+            textColumn("Parcelas", "count"),
+            {
+              label: "Total registrado",
+              render: (row) => formatAmount(row.total, String(row.currency)),
+            },
+            {
+              label: "Total planejado",
+              render: (row) => formatAmount(row.planned, String(row.currency)),
+            },
+          ]}
+        />
+        {groupRows.length > 0 && (
+          <>
+            <RecordList
+              title="Parcelas"
+              resource="transactions"
+              records={installmentRows}
+              singular="parcela"
+              columns={[
+                {
+                  label: "Grupo",
+                  render: (row) => groupName(row.installment_group_id),
+                },
+                { label: "Data", render: (row) => longDate(row.occurred_at) },
+                {
+                  label: "Valor",
+                  render: (row) =>
+                    formatAmount(amount(row), currencyOf(data.accounts, row)),
+                },
+                { label: "Situação", render: (row) => statusBadge(row.status) },
+              ]}
+              actions={(row) =>
+                row.status === "planned" && (
+                  <Confirm
+                    label="Confirmar parcela"
+                    title="Confirmar parcela"
+                    description="Registrar esta parcela como confirmada."
+                    onConfirm={async () => {
+                      await api(
+                        `/transactions/${encodeURIComponent(row.id)}`,
+                        "PUT",
+                        { status: "confirmed" },
+                      );
+                      await reload();
+                      notify("Parcela confirmada.");
+                    }}
+                  />
+                )
+              }
+            />
+            <RecordList
+              title="Nomes personalizados"
+              resource="installment_labels"
+              records={data.installment_labels}
+              singular="nome"
+              fields={(row) => [
+                {
+                  name: "group_id",
+                  label: "Grupo",
+                  kind: "select",
+                  required: true,
+                  options: options(
+                    groupRows.filter(
+                      (group) =>
+                        !data.installment_labels.some(
+                          (label) =>
+                            label.id !== row?.id && label.group_id === group.id,
+                        ),
+                    ),
+                  ),
+                },
+                {
+                  name: "label",
+                  label: "Nome",
+                  required: true,
+                  maxLength: 255,
+                },
+              ]}
+              columns={[
+                {
+                  label: "Grupo original",
+                  render: (row) => recordName(groupRows, row.group_id),
+                },
+                textColumn("Nome", "label"),
+              ]}
+            />
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function monthlyTotals(transactions: Row[], accounts: Row[], month: string) {
+  const rows = transactions.filter(
+    (row) =>
+      row.status === "confirmed" &&
+      String(row.occurred_at).startsWith(month) &&
+      currencyOf(accounts, row) === "BRL",
+  );
+  return {
+    rows,
+    income: sum(rows.filter((row) => row.type === "income")),
+    expenses: sum(rows.filter((row) => row.type === "expense")),
+    refunds: sum(rows.filter((row) => row.type === "refund")),
+  };
+}
+
+function expenseSlices(rows: Row[], categories: Row[]) {
+  const totals = new Map<string, number>();
+  for (const row of rows.filter((row) => row.type === "expense")) {
+    const id = String(row.category ?? "");
+    totals.set(id, (totals.get(id) ?? 0) + amount(row));
+  }
+  return [...totals]
+    .map(([id, value]) => {
+      const category = categories.find((row) => row.id === id);
+      return {
+        name: String(category?.name ?? "Sem categoria"),
+        value,
+        color: category?.color ? String(category.color) : undefined,
+      };
+    })
+    .sort((a, b) => b.value - a.value);
+}
+
+export function Dashboard() {
+  const { data, user } = useRecords();
+  const month = today().slice(0, 7);
+  const totals = monthlyTotals(data.transactions, data.accounts, month);
+  const balances = currentBalances(
+    data.accounts,
+    data.transactions,
+    data.reward_redemptions,
+  );
+  const balance = sum(
+    data.accounts.filter(
+      (row) => row.currency_code === "BRL" && !row.exclude_from_totals,
+    ),
+    (row) => balances.get(row.id) ?? 0,
+  );
+  const months = Array.from({ length: 6 }, (_, index) => {
+    const date = new Date(month + "-01T00:00:00Z");
+    date.setUTCMonth(date.getUTCMonth() - 5 + index);
+    return date.toISOString().slice(0, 7);
+  });
+  const history = months.map((period) =>
+    monthlyTotals(data.transactions, data.accounts, period),
+  );
+  const slices = expenseSlices(totals.rows, data.categories);
+  return (
+    <>
+      <PageHeading
+        title={`Olá, ${user.display_name.split(" ")[0]}`}
+        description={`Seu painel financeiro em ${monthLabel(month)}.`}
+        action={
+          <Link className="button primary" to="/lancamentos">
+            Gerenciar lançamentos
+          </Link>
+        }
+      />
+      <div className="record-stack">
+        <div className="metric-grid three">
+          <Metric
+            label="Saldo das contas"
+            value={balance}
+            hint="Contas em reais incluídas no total"
+            icon={<Wallet size={17} />}
+          />
+          <Metric
+            label="Receitas do mês"
+            value={totals.income}
+            hint="Receitas confirmadas em reais"
+            icon={<ArrowUpRight size={17} />}
+            color="#14956c"
+          />
+          <Metric
+            label="Despesas do mês"
+            value={totals.expenses - totals.refunds}
+            hint="Despesas confirmadas em reais, após estornos"
+            icon={<ArrowDownLeft size={17} />}
+            color="#d06458"
+          />
+        </div>
+        <div className="overview-charts">
+          <Card
+            title="Receitas e despesas"
+            subtitle="Movimentações confirmadas em reais nos últimos seis meses"
+          >
+            <LineChart
+              labels={months.map(shortMonth)}
+              area
+              series={[
+                {
+                  name: "Receitas",
+                  values: history.map((row) => row.income),
+                  color: "#518FF1",
+                },
+                {
+                  name: "Despesas líquidas",
+                  values: history.map((row) => row.expenses - row.refunds),
+                  color: "#a367c4",
+                },
+              ]}
+            />
+          </Card>
+          <Card title="Despesas por categoria" subtitle={monthLabel(month)}>
+            {slices.length ? (
+              <Donut
+                slices={slices}
+                center={`R$ ${compact(totals.expenses)}`}
+                subtitle="despesas"
+              />
+            ) : (
+              <Empty
+                title="Sem despesas no mês"
+                description="As despesas confirmadas em reais aparecerão aqui."
+              />
+            )}
+          </Card>
+        </div>
+        <RecordList
+          records={data.transactions.slice(0, 5)}
+          title="Lançamentos recentes"
+          resource="transactions"
+          singular="lançamento"
+          columns={transactionColumns(data)}
+        />
+      </div>
+    </>
+  );
+}
+
+export function Reports() {
+  const { data } = useRecords();
+  const [month, setMonth] = useState(today().slice(0, 7));
+  const totals = monthlyTotals(data.transactions, data.accounts, month);
+  const slices = expenseSlices(totals.rows, data.categories);
+  const result = totals.income - totals.expenses + totals.refunds;
+  return (
+    <>
+      <PageHeading
+        title="Relatórios"
+        description="Consulte as movimentações confirmadas em reais por competência."
+        action={<MonthField month={month} onChange={setMonth} />}
+      />
+      <div className="record-stack">
+        <div className="metric-grid three">
+          <Metric
+            label="Receitas"
+            value={totals.income}
+            hint="Entradas confirmadas"
+            icon={<ArrowUpRight size={17} />}
+          />
+          <Metric
+            label="Despesas líquidas"
+            value={totals.expenses - totals.refunds}
+            hint="Despesas após estornos"
+            icon={<ArrowDownLeft size={17} />}
+          />
+          <Metric
+            label="Resultado"
+            value={result}
+            hint="Receitas menos despesas líquidas"
+            icon={<Wallet size={17} />}
+          />
+        </div>
+        {slices.length > 0 && (
+          <Card title="Despesas por categoria" subtitle={monthLabel(month)}>
+            <Donut
+              slices={slices}
+              center={`R$ ${compact(totals.expenses)}`}
+              subtitle="despesas"
+            />
+          </Card>
+        )}
+        <RecordList
+          title="Detalhamento"
+          records={totals.rows}
+          resource="transactions"
+          singular="lançamento"
+          columns={transactionColumns(data)}
+        />
+      </div>
     </>
   );
 }

@@ -3968,3 +3968,35 @@ td strong {
     --metric-size-max: 26px;
   }
 }
+
+.record-stack {
+  display: grid;
+  gap: 18px;
+}
+.login-fields {
+  margin-top: 24px;
+}
+.record-stack > * {
+  min-width: 0;
+}
+.sidebar-nav .nav-group {
+  margin-block-end: 6px;
+}
+.overview-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.table-hint {
+  display: none;
+}
+@media (max-width: 760px) {
+  .overview-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .table-hint {
+    display: block;
+    margin-top: 10px;
+    color: var(--muted);
+  }
+}

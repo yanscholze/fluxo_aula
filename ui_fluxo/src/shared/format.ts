@@ -1,4 +1,4 @@
-import { format, cents, parseMoney } from "@fluxo/core/kernel/money.ts";
+import { format, cents, parseMoney } from "./money";
 export const money = (n: number, currency = "BRL") =>
   format(cents(n), { currency });
 const compactFormatter = new Intl.NumberFormat("pt-BR", {

@@ -1,7 +1,9 @@
 import {
+  cloneElement,
   useId,
   useState,
   type ReactNode,
+  type ReactElement,
   type ButtonHTMLAttributes,
 } from "react";
 import { Dialog as RDialog } from "radix-ui";
@@ -288,7 +290,7 @@ export function Notice({
 export function Loading() {
   return (
     <div
-      aria-label="Carregando demonstração"
+      aria-label="Carregando dados"
       aria-busy="true"
       className="loading-grid"
     >
@@ -304,14 +306,18 @@ export function Field({
   hint,
 }: {
   label: string;
-  children: ReactNode;
+  children: ReactElement<{ "aria-labelledby"?: string; "aria-describedby"?: string }>;
   hint?: string;
 }) {
+  const id = useId();
   return (
     <label className="field">
-      <span>{label}</span>
-      {children}
-      {hint && <small>{hint}</small>}
+      <span id={id}>{label}</span>
+      {cloneElement(children, {
+        "aria-labelledby": id,
+        "aria-describedby": hint ? id + "-hint" : undefined,
+      })}
+      {hint && <small id={id + "-hint"}>{hint}</small>}
     </label>
   );
 }
@@ -345,7 +351,7 @@ export function Modal({
               <RDialog.Title>{title}</RDialog.Title>
               <RDialog.Description>
                 {description ??
-                  "Os dados desta demonstração ficam apenas neste navegador."}
+                  "Confira os dados antes de continuar."}
               </RDialog.Description>
             </div>
             <RDialog.Close asChild>
