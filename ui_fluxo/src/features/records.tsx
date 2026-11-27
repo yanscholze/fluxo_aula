@@ -16,11 +16,24 @@ import {
   Modal,
   Notice,
 } from "../design-system/ui";
-import { readMoney } from "../shared/format";
+import { inputMoney, money, readMoney } from "../shared/format";
 
 type Value = string | number | boolean | null;
+export type User = {
+  id: string;
+  email: string;
+  display_name: string;
+  avatar_data: string | null;
+};
 export type Row = { id: string; [key: string]: Value };
-export type User = { id: string; email: string; display_name: string };
+export type Records = {
+  accounts: Row[];
+  categories: Row[];
+  cards: Row[];
+  transactions: Row[];
+  installment_groups: Row[];
+};
+type Resource = Exclude<keyof Records, "installment_groups">;
 export type Option = { value: string; label: string };
 export type Column = { label: string; render: (row: Row) => ReactNode };
 export type FieldSpec = {
@@ -28,30 +41,29 @@ export type FieldSpec = {
   label: string;
   kind?:
     | "text"
-    | "textarea"
     | "date"
     | "month"
-    | "datetime"
+    | "money"
     | "integer"
     | "decimal"
-    | "money"
-    | "checkbox"
-    | "select";
+    | "select"
+    | "checkbox";
   options?: Option[];
   required?: boolean;
-  defaultValue?: string | number | boolean;
+  defaultValue?: string;
   min?: number;
   max?: number;
-  maxLength?: number;
   scale?: number;
   hint?: string;
+  maxLength?: number;
   hidden?: boolean;
-  omitBlank?: boolean;
 };
-export type Fields = FieldSpec[] | ((row?: Row) => FieldSpec[]);
+export type Fields = FieldSpec[] | ((draft: Row) => FieldSpec[]);
+
 type RecordsState = {
-  data: Record<string, Row[]>;
+  data: Records;
   user: User;
+  updateUser: (user: User) => void;
   reload: () => Promise<void>;
   notify: (message: string) => void;
 };
@@ -59,7 +71,7 @@ export const RecordsContext = createContext<RecordsState | null>(null);
 
 export function useRecords() {
   const context = useContext(RecordsContext);
-  if (!context) throw new Error("Dados da sessão indisponíveis.");
+  if (!context) throw new Error("Dados indisponíveis.");
   return context;
 }
 
@@ -85,6 +97,8 @@ export async function api<T = unknown>(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         }),
+  }).catch(() => {
+    throw new Error("Não foi possível conectar ao Fluxo.");
   });
   const result = await response.json().catch(() => null);
   if (!response.ok) {
@@ -96,102 +110,101 @@ export async function api<T = unknown>(
   return result as T;
 }
 
-export function options(records: Row[], label = "name"): Option[] {
-  return records.map((row) => ({
-    value: row.id,
-    label: String(row[label] || row.id),
-  }));
+export function options(records: Row[]): Option[] {
+  return records.map((row) => ({ value: row.id, label: String(row.name) }));
 }
 
-export function recordName(records: Row[], value: unknown) {
-  return (
-    records.find((row) => row.id === String(value))?.name ??
-    String(value || "—")
-  );
+export function recordName(records: Row[], value: Value) {
+  return records.find((row) => row.id === value)?.name ?? "—";
 }
 
-export function formatAmount(cents: unknown, currency = "BRL") {
-  return new Intl.NumberFormat("pt-BR", { style: "currency", currency }).format(
-    Number(cents ?? 0) / 100,
-  );
+export function formatAmount(cents: Value | undefined, currency = "BRL") {
+  return money(Number(cents ?? 0), currency);
 }
 
-function inputValue(field: FieldSpec, value: Value | undefined): string {
-  if (value == null) return String(field.defaultValue ?? "");
-  if (field.kind === "money" || field.kind === "decimal") {
-    const scale = field.kind === "money" ? 2 : (field.scale ?? 0);
-    return (Number(value) / 10 ** scale).toFixed(scale).replace(".", ",");
+function inputValue(
+  field: FieldSpec,
+  previous: Value | undefined,
+  changed: string | undefined,
+) {
+  if (field.hidden) return "";
+  if (field.kind === "checkbox") return changed ?? (previous ? "1" : "");
+  const text = changed ?? storedValue(field, previous);
+  if (
+    field.kind === "select" &&
+    !field.options?.some(({ value }) => value === text)
+  )
+    return "";
+  return text;
+}
+
+function storedValue(field: FieldSpec, previous: Value | undefined) {
+  if (previous == null) return field.defaultValue ?? "";
+  if (field.kind === "date") return String(previous).slice(0, 10);
+  if (field.kind === "money") return inputMoney(Number(previous));
+  if (field.kind === "decimal") {
+    const scale = field.scale ?? 0;
+    return (Number(previous) / 10 ** scale).toFixed(scale).replace(".", ",");
   }
-  if (field.kind === "datetime")
-    return String(value).replace(" ", "T").slice(0, 16);
-  if (field.kind === "date") return String(value).slice(0, 10);
-  return String(value);
+  return String(previous);
 }
 
-function normalize(field: FieldSpec, value: Value): Value {
+function normalize(field: FieldSpec, value: string): Value {
   if (field.kind === "checkbox") return Boolean(value);
-  const text = String(value ?? "").trim();
+  const text = value.trim();
   if (!text) {
-    if (field.required) throw new Error(`Preencha o campo ${field.label}.`);
+    if (field.required && !field.hidden)
+      throw new Error(`Preencha o campo ${field.label}.`);
     return null;
   }
-  if (field.kind === "datetime") return text.replace("T", " ") + ":00";
-  if (field.kind === "money") {
-    const cents = readMoney(text);
+
+  if (
+    field.kind === "money" ||
+    field.kind === "integer" ||
+    field.kind === "decimal"
+  ) {
+    const scale = field.kind === "money" ? 2 : (field.scale ?? 0);
+    const numeric =
+      field.kind === "money"
+        ? readMoney(text)
+        : Number(text.replace(",", ".")) * 10 ** scale;
+    const scaled = Math.round(numeric);
+    const value = scaled / 10 ** scale;
+    const format = field.kind === "integer" ? /^-?\d+$/ : /^-?\d+(?:[,.]\d+)?$/;
     if (
-      (field.min !== undefined && cents < field.min * 100) ||
-      (field.max !== undefined && cents > field.max * 100)
-    ) {
-      throw new Error(`Informe um valor válido em ${field.label}.`);
-    }
-    return cents;
-  }
-  if (field.kind === "integer" || field.kind === "decimal") {
-    const value = Number(text.replace(",", "."));
-    const scaled = Math.round(value * 10 ** (field.scale ?? 0));
-    if (
-      !/^-?\d+(?:[.,]\d+)?$/.test(text) ||
+      (field.kind !== "money" && !format.test(text)) ||
       !Number.isSafeInteger(scaled) ||
-      (field.kind === "integer" && !Number.isInteger(value)) ||
       (field.min !== undefined && value < field.min) ||
       (field.max !== undefined && value > field.max)
     ) {
-      throw new Error(`Informe um número válido em ${field.label}.`);
+      throw new Error(`Informe um valor válido em ${field.label}.`);
     }
     return scaled;
   }
   return text;
 }
 
-export function RecordEditor({
+function RecordEditor({
   resource,
   singular,
   fields,
   row,
   onClose,
-  wide,
 }: {
-  resource: string;
+  resource: Resource;
   singular: string;
   fields: Fields;
   row?: Row;
   onClose: () => void;
-  wide?: boolean;
 }) {
   const { reload, notify } = useRecords();
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const record = { id: row?.id ?? "", ...row, ...values };
-  const activeFields = typeof fields === "function" ? fields(record) : fields;
-
-  function fieldValue(field: FieldSpec): Value {
-    if (field.hidden) return null;
-    if (Object.hasOwn(values, field.name)) return values[field.name];
-    if (field.kind === "checkbox")
-      return Boolean(row?.[field.name] ?? field.defaultValue ?? false);
-    return inputValue(field, row?.[field.name]);
-  }
+  const draft = { id: "", ...row, ...values };
+  const activeFields = typeof fields === "function" ? fields(draft) : fields;
+  const valueOf = (field: FieldSpec) =>
+    inputValue(field, row?.[field.name], values[field.name]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -199,26 +212,21 @@ export function RecordEditor({
     setError("");
     try {
       const payload = Object.fromEntries(
-        activeFields
-          .filter((field) => row || !field.omitBlank || fieldValue(field))
-          .map((field) => {
-            const previous = row?.[field.name];
-            const unchangedDate =
-              previous != null &&
-              !field.hidden &&
-              !Object.hasOwn(values, field.name) &&
-              (field.kind === "date" || field.kind === "datetime");
-            return [
-              field.name,
-              unchangedDate ? previous : normalize(field, fieldValue(field)),
-            ];
-          }),
+        activeFields.map((field) => {
+          const previous = row?.[field.name];
+          const unchangedDate =
+            field.kind === "date" &&
+            previous != null &&
+            !Object.hasOwn(values, field.name);
+          return [
+            field.name,
+            unchangedDate ? previous : normalize(field, valueOf(field)),
+          ];
+        }),
       );
-      await api(
-        "/" + resource + (row ? "/" + encodeURIComponent(row.id) : ""),
-        row ? "PUT" : "POST",
-        payload,
-      );
+      const path =
+        "/" + resource + (row ? "/" + encodeURIComponent(row.id) : "");
+      await api(path, row ? "PUT" : "POST", payload);
       await reload();
       notify("Registro salvo.");
       onClose();
@@ -237,7 +245,6 @@ export function RecordEditor({
       onClose={() => {
         if (!busy) onClose();
       }}
-      wide={wide}
       title={row ? `Editar ${singular}` : `Adicionar ${singular}`}
       description="Preencha os campos e salve o registro."
     >
@@ -246,64 +253,52 @@ export function RecordEditor({
           {activeFields
             .filter((field) => !field.hidden)
             .map((field) => {
-              const value = fieldValue(field);
-              const change = (value: string | boolean) =>
-                setValues((old) => ({ ...old, [field.name]: value }));
-              const text = String(value ?? "");
+              const value = valueOf(field);
+              const change = (next: string) =>
+                setValues((old) => ({ ...old, [field.name]: next }));
               return (
                 <Field key={field.name} label={field.label} hint={field.hint}>
                   {field.kind === "checkbox" ? (
                     <input
                       type="checkbox"
                       checked={Boolean(value)}
-                      onChange={(event) => change(event.target.checked)}
+                      onChange={(event) =>
+                        change(event.target.checked ? "1" : "")
+                      }
                     />
                   ) : field.kind === "select" ? (
                     <select
-                      value={text}
+                      value={value}
                       required={field.required}
                       onChange={(event) => change(event.target.value)}
                     >
                       <option value="">
                         {field.required ? "Selecione" : "—"}
                       </option>
-                      {text &&
-                        !field.options?.some(
-                          (option) => option.value === text,
-                        ) && <option value={text}>{text}</option>}
                       {field.options?.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
                     </select>
-                  ) : field.kind === "textarea" ? (
-                    <textarea
-                      required={field.required}
-                      value={text}
-                      maxLength={field.maxLength}
-                      onChange={(event) => change(event.target.value)}
-                    />
                   ) : (
                     <input
                       type={
-                        field.kind === "datetime"
-                          ? "datetime-local"
+                        field.kind === "date" || field.kind === "month"
+                          ? field.kind
                           : field.kind === "integer"
                             ? "number"
-                            : field.kind === "date" || field.kind === "month"
-                              ? field.kind
-                              : "text"
+                            : "text"
                       }
                       inputMode={
                         field.kind === "money" || field.kind === "decimal"
                           ? "decimal"
                           : undefined
                       }
-                      required={field.required}
-                      value={text}
                       min={field.kind === "integer" ? field.min : undefined}
                       max={field.kind === "integer" ? field.max : undefined}
+                      required={field.required}
+                      value={value}
                       maxLength={field.maxLength}
                       onChange={(event) => change(event.target.value)}
                     />
@@ -335,45 +330,46 @@ export function RecordList({
   resource,
   records,
   title,
-  subtitle,
   singular,
+  addLabel,
   fields,
   columns,
-  canCreate = Boolean(fields),
-  canEdit = Boolean(fields),
-  canDelete = Boolean(fields),
-  actions,
-  wide,
+  canCreate = true,
+  toolbar,
+  emptyTitle,
+  emptyDescription,
+  emptyAction,
 }: {
-  resource: string;
+  resource: Resource;
   records: Row[];
-  title?: string;
-  subtitle?: string;
+  title: string;
   singular: string;
-  fields?: Fields;
+  addLabel?: string;
+  fields: Fields;
   columns: Column[];
   canCreate?: boolean;
-  canEdit?: boolean;
-  canDelete?: boolean;
-  actions?: (row: Row) => ReactNode;
-  wide?: boolean;
+  toolbar?: ReactNode;
+  emptyTitle: string;
+  emptyDescription?: string;
+  emptyAction?: ReactNode;
 }) {
   const { reload, notify } = useRecords();
   const [editor, setEditor] = useState<Row | "new" | null>(null);
-  const hasActions = canEdit || canDelete || Boolean(actions);
   const add = canCreate && (
-    <AddButton onClick={() => setEditor("new")}>Adicionar {singular}</AddButton>
+    <AddButton onClick={() => setEditor("new")}>
+      {addLabel ?? `Adicionar ${singular}`}
+    </AddButton>
   );
 
   return (
-    <Card title={title} subtitle={subtitle} action={add}>
-      {!title && add && <div className="toolbar">{add}</div>}
+    <Card title={title} action={add}>
+      {toolbar}
       {records.length ? (
         <div
           className="table-scroll"
           tabIndex={0}
           role="region"
-          aria-label={title ?? singular}
+          aria-label={title}
         >
           <table>
             <thead>
@@ -383,7 +379,7 @@ export function RecordList({
                     {column.label}
                   </th>
                 ))}
-                {hasActions && <th scope="col">Ações</th>}
+                <th scope="col">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -392,40 +388,33 @@ export function RecordList({
                   {columns.map((column) => (
                     <td key={column.label}>{column.render(row)}</td>
                   ))}
-                  {hasActions && (
-                    <td>
-                      <div className="row-actions">
-                        {actions?.(row)}
-                        {canEdit && (
-                          <Button
-                            variant="ghost"
-                            aria-label={`Editar ${singular}`}
-                            onClick={() => setEditor(row)}
-                          >
-                            <Pencil size={16} />
-                          </Button>
-                        )}
-                        {canDelete && (
-                          <Confirm
-                            label={`Excluir ${singular}`}
-                            title="Excluir registro"
-                            description="O registro será removido."
-                            danger
-                            onConfirm={async () => {
-                              await api(
-                                `/${resource}/${encodeURIComponent(row.id)}`,
-                                "DELETE",
-                              );
-                              await reload();
-                              notify("Registro excluído.");
-                            }}
-                          >
-                            <Trash2 size={16} />
-                          </Confirm>
-                        )}
-                      </div>
-                    </td>
-                  )}
+                  <td>
+                    <div className="row-actions">
+                      <Button
+                        variant="ghost"
+                        aria-label={`Editar ${singular}`}
+                        onClick={() => setEditor(row)}
+                      >
+                        <Pencil size={16} />
+                      </Button>
+                      <Confirm
+                        label={`Excluir ${singular}`}
+                        title={`Excluir ${singular}`}
+                        description="O registro será removido."
+                        danger
+                        onConfirm={async () => {
+                          await api(
+                            `/${resource}/${encodeURIComponent(row.id)}`,
+                            "DELETE",
+                          );
+                          await reload();
+                          notify("Registro excluído.");
+                        }}
+                      >
+                        <Trash2 size={16} />
+                      </Confirm>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -433,21 +422,21 @@ export function RecordList({
         </div>
       ) : (
         <Empty
-          title="Nenhum registro"
-          description="Os registros desta lista aparecerão aqui."
+          title={emptyTitle}
+          description={emptyDescription}
+          action={emptyAction}
         />
       )}
       {records.length > 0 && columns.length >= 4 && (
         <small className="table-hint">Deslize para ver mais colunas.</small>
       )}
-      {editor && fields && (
+      {editor && (
         <RecordEditor
           resource={resource}
           singular={singular}
           fields={fields}
           row={editor === "new" ? undefined : editor}
           onClose={() => setEditor(null)}
-          wide={wide}
         />
       )}
     </Card>

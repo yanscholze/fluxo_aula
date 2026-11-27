@@ -36,11 +36,6 @@ export function Login({ onSuccess }: { onSuccess: (user: User) => void }) {
         <div>
           <h1>Seu dinheiro em perspectiva.</h1>
           <p>Acompanhe contas, cartões e lançamentos em um só lugar.</p>
-          <div className="login-orbit" aria-hidden="true">
-            <span />
-            <span />
-            <i>f.</i>
-          </div>
         </div>
       </div>
       <div className="login-form">

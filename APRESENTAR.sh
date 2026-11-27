@@ -11,18 +11,26 @@ if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--sql" ) ]]; then
 fi
 
 if [[ -f "$runtime/mysql-client.cnf" && -x "$runtime/bin/node" ]]; then
+  schema=fluxo_pessoal_apresentacao
   mysql_path="$runtime/mysql/usr"
   mysql_local() {
     LD_LIBRARY_PATH="$mysql_path/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
       "$mysql_path/bin/mysql" --defaults-file="$runtime/mysql-client.cnf" "$@"
   }
 
+  sql_local() {
+    local file="$1"
+    shift
+    sed -E "s/^(CREATE DATABASE IF NOT EXISTS|USE) fluxo_pessoal([;[:space:]]|$)/\1 $schema\2/" "$file" |
+      mysql_local "$@"
+  }
+
   if [[ "${1:-}" == "--sql" ]]; then
-    if ! mysql_local --batch --execute='SELECT 1' >/dev/null 2>&1; then
+    if ! mysql_local --database="$schema" --execute='SELECT 1' >/dev/null 2>&1; then
       echo "Inicie ./APRESENTAR.sh em outro terminal antes de executar as consultas." >&2
       exit 1
     fi
-    mysql_local --table < database/03-consultas-demo.sql
+    sql_local database/03-consultas-demo.sql --table
     exit
   fi
 
@@ -69,8 +77,21 @@ if [[ -f "$runtime/mysql-client.cnf" && -x "$runtime/bin/node" ]]; then
     exit 1
   fi
 
-  HOST=127.0.0.1 PORT="$port" DB_HOST=127.0.0.1 DB_PORT=33307 DB_USER=fluxo \
-    DB_PASSWORD="$(< "$runtime/app-password")" node server/index.mjs &
+  if [[ ! -f "$runtime/anexo-preparado" ]]; then
+    if ! mysql_local --database="$schema" --execute='SELECT id FROM vw_lancamentos LIMIT 0' >/dev/null 2>&1; then
+      sql_local database/01-banco.sql
+    fi
+    mysql_local --execute="GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON $schema.* TO 'fluxo'@'127.0.0.1'"
+    sql_local database/02-dados-demo.sql
+    touch "$runtime/anexo-preparado"
+  fi
+
+  if [[ ! -s "$runtime/anexo-secret" ]]; then
+    (umask 077; node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))' > "$runtime/anexo-secret")
+  fi
+
+  HOST=127.0.0.1 PORT="$port" DB_HOST=127.0.0.1 DB_PORT=33307 DB_NAME="$schema" DB_USER=fluxo \
+    DB_PASSWORD="$(< "$runtime/app-password")" SESSION_SECRET="$(< "$runtime/anexo-secret")" node server/index.mjs &
   app_pid=$!
   wait "$app_pid"
   exit
@@ -86,13 +107,12 @@ if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
   fi
 
   docker compose up -d --build --wait
-  demo=$(docker_sql --batch --skip-column-names --execute="SELECT 1 FROM fluxo_pessoal.users WHERE id = 'fluxo-aula-demo' AND email = 'demo@fluxo.local'")
-  if [[ "$demo" != 1 ]]; then
+  demo=$(docker_sql --batch --skip-column-names --execute="SELECT COUNT(*) FROM fluxo_pessoal.users WHERE email = 'demo@fluxo.local'")
+  if [[ "$demo" == 0 ]]; then
     docker_sql < database/02-dados-demo.sql
   fi
   address=$(docker compose port app 5174)
   echo "Fluxo disponível em http://$address."
-  echo 'Apresentação: demo@fluxo.local / FluxoDemo123!'
   exit
 fi
 

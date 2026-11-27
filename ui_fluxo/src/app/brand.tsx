@@ -1,13 +1,8 @@
 import { Link } from "react-router";
 
-export function Brand({ onClick }: { onClick?: () => void }) {
+export function Brand() {
   return (
-    <Link
-      className="brand"
-      to="/painel"
-      onClick={onClick}
-      aria-label="Fluxo — Painel"
-    >
+    <Link className="brand" to="/lancamentos" aria-label="Fluxo — Lançamentos">
       <span className="brand-icon" aria-hidden="true">
         <svg width="25" height="28" viewBox="0 0 25 28">
           <path

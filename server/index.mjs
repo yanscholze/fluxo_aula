@@ -8,31 +8,34 @@ import { financeRouter } from "./finance.mjs";
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 5174);
+const database = process.env.DB_NAME || "fluxo_pessoal";
 const db = mysql.createPool({
   host: process.env.DB_HOST || "127.0.0.1",
   port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER || "fluxo",
   password: process.env.DB_PASSWORD || "fluxo_local",
-  database: "fluxo_pessoal",
-  charset: "utf8mb4",
+  database,
   dateStrings: true,
   supportBigNumbers: true,
-  connectionLimit: 8,
+  connectionLimit: 4,
 });
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 const index = fileURLToPath(new URL("../dist/index.html", import.meta.url));
+
 const app = express();
 app.disable("x-powered-by");
-
 app.use("/api", (req, res, next) => {
   res.set("Cache-Control", "no-store");
   const origin = req.get("origin");
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method) || !origin) return next();
-  const requestOrigin = `${req.protocol}://${req.get("host")}`;
-  if (origin === (process.env.APP_ORIGIN || requestOrigin)) return next();
-  res.status(403).json({ error: "Origem da solicitação inválida." });
+  if (origin && origin !== `${req.protocol}://${req.get("host")}`) {
+    return res
+      .status(403)
+      .json({ error: "Abra o aplicativo pelo endereço local." });
+  }
+  next();
 });
 app.use("/api", express.json({ limit: "512kb" }));
+
 app.get("/api/health", async (_req, res) => {
   await db.query("SELECT 1");
   res.json({ ok: true });
@@ -44,65 +47,69 @@ app.use("/api", (_req, res) =>
 );
 app.use(express.static(dist));
 app.use((req, res, next) => {
-  if (req.method === "GET" && !extname(req.path) && req.accepts("html"))
+  if (req.method === "GET" && !extname(req.path) && req.accepts("html")) {
     return res.sendFile(index);
+  }
   next();
 });
+
 app.use((error, _req, res, _next) => {
-  const status = error.status >= 400 && error.status < 600 ? error.status : 500;
-  if (status >= 500) console.error(error);
-  const message =
-    status >= 500
-      ? "Não foi possível concluir a operação. Consulte o terminal do servidor."
-      : error.type === "entity.parse.failed"
-        ? "JSON inválido."
-        : error.message;
-  res.status(status).json({ error: message });
+  if (error.status >= 400 && error.status < 500) {
+    const message =
+      error.type === "entity.parse.failed" ? "JSON inválido." : error.message;
+    return res.status(error.status).json({ error: message });
+  }
+  console.error(error);
+  res.status(500).json({ error: "Não foi possível concluir a operação." });
 });
 
 try {
   if (!existsSync(index))
     throw new Error("Execute npm run build para gerar a interface.");
-  const [columns] = await db.query(
-    "SHOW COLUMNS FROM transactions LIKE 'account'",
+  const [tables] = await db.execute(
+    `SELECT table_name AS name FROM information_schema.tables
+      WHERE table_schema = ? AND table_type = 'BASE TABLE'
+      ORDER BY table_name`,
+    [database],
   );
-  if (columns[0]?.Type !== "varchar(64)") {
-    throw new Error("O banco tem um esquema incompatível. Para uma base nova, use database/01-banco.sql.");
+  const expected = [
+    "accounts",
+    "cards",
+    "categories",
+    "installment_groups",
+    "transactions",
+    "user_profiles",
+    "users",
+  ];
+  if (tables.map((table) => table.name).join(",") !== expected.join(",")) {
+    throw new Error("Crie uma base nova com database/01-banco.sql.");
   }
-  try {
-    await db.query("SELECT valor_origem_centavos FROM vw_lancamentos LIMIT 0");
-  } catch (error) {
-    if (error.code === "ER_NO_SUCH_TABLE") {
-      throw new Error("A visão de lançamentos está ausente. Confira database/01-banco.sql.");
-    }
-    throw error;
-  }
+  await db.query("SELECT id FROM vw_lancamentos LIMIT 0");
   const server = app.listen(port, host, () => {
     console.log(
       `Fluxo disponível em http://${host === "0.0.0.0" ? "localhost" : host}:${port}`,
     );
   });
   let stopping = false;
-  const closePool = () =>
-    db.end().catch((error) => {
-      console.error(`Falha ao fechar a conexão com o MySQL. ${error.message}`);
-      process.exitCode = 1;
-    });
-  server.on("error", (error) => {
+  const closePool = () => db.end().catch(console.error);
+  function stop() {
+    if (stopping) return;
+    stopping = true;
+    server.close(() => void closePool());
+  }
+  server.once("error", (error) => {
     console.error(`Falha ao abrir a porta ${port}. ${error.message}`);
     stopping = true;
     void closePool();
     process.exitCode = 1;
   });
-  const stop = () => {
-    if (stopping) return;
-    stopping = true;
-    server.close(() => void closePool());
-  };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 } catch (error) {
   console.error(`Falha ao iniciar o Fluxo. ${error.message}`);
+  if (["ER_BAD_DB_ERROR", "ER_NO_SUCH_TABLE"].includes(error.code)) {
+    console.error("Crie a base com database/01-banco.sql.");
+  }
   await db.end();
   process.exitCode = 1;
 }

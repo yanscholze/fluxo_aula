@@ -1,156 +1,107 @@
--- 03. Consultas para a apresentação. Execute após 02-dados-demo.sql.
--- Os exemplos usam apenas o perfil fictício.
+-- Roteiro SQL. Execute após 01-banco.sql e 02-dados-demo.sql.
 USE fluxo_pessoal;
 
 SET @demo_owner = (
     SELECT id FROM users WHERE id = 'fluxo-aula-demo' AND email = 'demo@fluxo.local'
 );
 
--- WHERE e ORDER BY: extrato do mês mais recente do conjunto de apresentação.
--- A view devolve o número de parcelas e o valor com sinal para a conta de origem.
-SET @mes_extrato = (
-    SELECT CAST(DATE_FORMAT(MAX(occurred_at), '%Y-%m-01') AS DATE)
-    FROM vw_lancamentos
-    WHERE owner_id = @demo_owner AND deleted_at IS NULL AND status = 'confirmed'
-);
+-- 1. Extrato com as duas contas, a categoria e o valor com sinal.
+SELECT l.occurred_at, l.description, origem.name AS origem, destino.name AS destino,
+       c.name AS categoria, l.installments, l.valor_origem_centavos
+FROM vw_lancamentos AS l
+LEFT JOIN accounts AS origem ON origem.owner_id = l.owner_id AND origem.id = l.account
+LEFT JOIN accounts AS destino ON destino.owner_id = l.owner_id AND destino.id = l.destination_account
+LEFT JOIN categories AS c ON c.owner_id = l.owner_id AND c.id = l.category
+WHERE l.owner_id = @demo_owner AND l.deleted_at IS NULL
+ORDER BY l.occurred_at DESC, l.created_at DESC, l.id DESC;
 
-SELECT description, occurred_at, type, amount_cents, installments, valor_origem_centavos
-FROM vw_lancamentos
-WHERE owner_id = @demo_owner
-  AND deleted_at IS NULL
-  AND occurred_at >= @mes_extrato
-  AND occurred_at < DATE_ADD(@mes_extrato, INTERVAL 1 MONTH)
-ORDER BY occurred_at DESC, id DESC;
-
--- JOIN, GROUP BY, HAVING e ORDER BY: total por categoria de gasto confirmado.
--- HAVING aplica o limite de R$ 100,00 ao total calculado de cada grupo.
-SELECT c.name AS categoria, COUNT(*) AS lancamentos, SUM(t.amount_cents) AS total_centavos
+-- 2. Categorias com pelo menos duas despesas confirmadas.
+SELECT c.name AS categoria, COUNT(*) AS quantidade, SUM(t.amount_cents) AS total_centavos
 FROM transactions AS t
-JOIN categories AS c ON c.id = t.category AND c.owner_id = t.owner_id
-WHERE t.owner_id = @demo_owner
-  AND t.type = 'expense'
-  AND t.status = 'confirmed'
-  AND t.deleted_at IS NULL
+JOIN categories AS c ON c.owner_id = t.owner_id AND c.id = t.category
+WHERE t.owner_id = @demo_owner AND t.type = 'expense'
+  AND t.status = 'confirmed' AND t.deleted_at IS NULL
 GROUP BY c.id, c.name
-HAVING SUM(t.amount_cents) >= 10000
-ORDER BY total_centavos DESC, categoria;
+HAVING COUNT(*) >= 2
+ORDER BY total_centavos DESC;
 
--- Subconsulta escalar: despesas confirmadas acima da média do próprio perfil.
-SELECT description, occurred_at, amount_cents
-FROM transactions AS t
-WHERE t.owner_id = @demo_owner
-  AND t.type = 'expense'
-  AND t.status = 'confirmed'
-  AND t.deleted_at IS NULL
-  AND t.amount_cents > (
-      SELECT AVG(amount_cents)
-      FROM transactions
-      WHERE owner_id = t.owner_id AND type = 'expense' AND status = 'confirmed' AND deleted_at IS NULL
+-- 3. Despesas confirmadas com valor acima da média.
+SELECT description, amount_cents
+FROM transactions
+WHERE owner_id = @demo_owner AND type = 'expense' AND status = 'confirmed' AND deleted_at IS NULL
+  AND amount_cents > (
+      SELECT AVG(amount_cents) FROM transactions
+      WHERE owner_id = @demo_owner AND type = 'expense' AND status = 'confirmed' AND deleted_at IS NULL
   )
-ORDER BY amount_cents DESC, occurred_at DESC;
+ORDER BY amount_cents DESC;
 
--- Um lote centraliza os metadados que os lançamentos importados têm em comum.
-SELECT l.name AS lote, l.month AS competencia, l.imported_at, t.description AS lancamento
-FROM import_batches AS l
-JOIN transactions AS t ON t.import_batch_id = l.id AND t.owner_id = l.owner_id
-WHERE l.owner_id = @demo_owner AND t.deleted_at IS NULL
-ORDER BY l.imported_at DESC, t.occurred_at DESC, t.id DESC;
-
--- Função: um débito de R$ 25,00 reduz a origem; um crédito do mesmo valor aumenta a origem.
-SELECT fn_valor_movimento('expense', 2500) AS saida_centavos,
-       fn_valor_movimento('income', 2500) AS entrada_centavos;
-
--- Índice: owner_id e deleted_at são filtros de igualdade e as colunas seguintes
--- já estão na ordem do extrato. Compare key e Extra nos dois resultados abaixo.
--- Os hints tornam a comparação reproduzível mesmo com poucos lançamentos.
-EXPLAIN
-SELECT id, description, amount_cents, occurred_at
-FROM transactions FORCE INDEX (idx_transactions_owner_data)
-WHERE owner_id = @demo_owner AND deleted_at IS NULL
-ORDER BY occurred_at DESC, created_at DESC, id DESC
-LIMIT 10;
-
-EXPLAIN
-SELECT id, description, amount_cents, occurred_at
+-- O índice atende aos filtros de igualdade e à ordem do extrato.
+-- Compare as colunas key e Extra. Desabilitar o índice leva a Using filesort.
+EXPLAIN SELECT id, occurred_at, description
 FROM transactions IGNORE INDEX (idx_transactions_owner_data)
 WHERE owner_id = @demo_owner AND deleted_at IS NULL
-ORDER BY occurred_at DESC, created_at DESC, id DESC
-LIMIT 10;
+ORDER BY occurred_at DESC, created_at DESC, id DESC;
 
--- Procedure, COMMIT e trigger de INSERT: a transferência e sua auditoria
--- persistem juntas. A procedure valida titularidade e moeda das duas contas.
--- Execute CALL sem transação aberta. O START TRANSACTION da procedure faria
--- o commit implícito de uma transação anterior nesta mesma conexão.
-SET @transferencia_exemplo = UUID();
+EXPLAIN SELECT id, occurred_at, description
+FROM transactions FORCE INDEX (idx_transactions_owner_data)
+WHERE owner_id = @demo_owner AND deleted_at IS NULL
+ORDER BY occurred_at DESC, created_at DESC, id DESC;
+
+-- DDL de exemplo. A tabela temporária existe apenas nesta sessão.
+CREATE TEMPORARY TABLE fluxo_demo_ddl (id INT PRIMARY KEY);
+ALTER TABLE fluxo_demo_ddl ADD COLUMN descricao VARCHAR(80) NOT NULL;
+SHOW COLUMNS FROM fluxo_demo_ddl;
+DROP TEMPORARY TABLE fluxo_demo_ddl;
+
+-- A procedure inicia e confirma a própria transação. Chame-a em autocommit.
+SET @transferencia = UUID();
 CALL sp_registrar_transferencia(
-    @demo_owner,
-    @transferencia_exemplo,
-    'Transferência temporária da apresentação',
-    'fluxo-aula-demo-conta-corrente',
-    'fluxo-aula-demo-conta-reserva',
-    CURRENT_TIMESTAMP,
-    2500,
-    'confirmed',
-    'account',
-    NULL
+    @demo_owner, @transferencia, 'Transferência SQL de apresentação',
+    'fluxo-aula-demo-corrente', 'fluxo-aula-demo-reserva', CURRENT_TIMESTAMP,
+    2500, 'confirmed', 'account'
 );
 
-SELECT id, account, destination_account, amount_cents, valor_origem_centavos
+SELECT description, account, destination_account, amount_cents, valor_origem_centavos
 FROM vw_lancamentos
-WHERE owner_id = @demo_owner AND id = @transferencia_exemplo;
+WHERE owner_id = @demo_owner AND id = @transferencia;
 
-SELECT a.action, a.transaction_id, a.amount_cents, a.audited_at
-FROM transaction_audit AS a
-JOIN transactions AS t ON t.id = a.transaction_id
-WHERE t.owner_id = @demo_owner AND t.id = @transferencia_exemplo
-ORDER BY a.id;
-
--- DML: a categoria temporária demonstra INSERT, UPDATE com WHERE e DELETE com WHERE.
--- O UPDATE da transferência também dispara um segundo registro na auditoria.
--- Atomicidade: o ROLLBACK desfaz a alteração e sua auditoria como uma unidade.
--- Consistência: as chaves asseguram os vínculos e os estados válidos persistem após o rollback.
--- Isolamento: o InnoDB protege as alterações abertas de leituras sujas no isolamento padrão.
--- Durabilidade: o rollback mantém a transferência e auditoria confirmadas pela procedure.
-SET @categoria_exemplo = UUID();
+-- UPDATE e DELETE de exemplo. O ROLLBACK restaura a linha confirmada pela procedure.
 START TRANSACTION;
+UPDATE transactions SET amount_cents = 3000
+WHERE owner_id = @demo_owner AND id = @transferencia;
+SELECT amount_cents AS valor_durante_teste FROM transactions
+WHERE owner_id = @demo_owner AND id = @transferencia;
 
-INSERT INTO categories (id, owner_id, name, kind)
-VALUES (@categoria_exemplo, @demo_owner, 'Categoria temporária', 'expense');
-
-UPDATE categories
-SET name = 'Categoria temporária revisada'
-WHERE owner_id = @demo_owner AND id = @categoria_exemplo;
-
-SELECT name FROM categories WHERE owner_id = @demo_owner AND id = @categoria_exemplo;
-
-DELETE FROM categories
-WHERE owner_id = @demo_owner AND id = @categoria_exemplo;
-
-UPDATE transactions
-SET amount_cents = 3000
-WHERE owner_id = @demo_owner AND id = @transferencia_exemplo;
-
-SELECT a.action, a.previous_amount_cents, a.amount_cents
-FROM transaction_audit AS a
-JOIN transactions AS t ON t.id = a.transaction_id
-WHERE t.owner_id = @demo_owner AND t.id = @transferencia_exemplo
-ORDER BY a.id;
-
+DELETE FROM transactions WHERE owner_id = @demo_owner AND id = @transferencia;
+SELECT COUNT(*) AS existe_apos_delete FROM transactions
+WHERE owner_id = @demo_owner AND id = @transferencia;
 ROLLBACK;
 
-SELECT id, amount_cents FROM transactions
-WHERE owner_id = @demo_owner AND id = @transferencia_exemplo;
+SELECT amount_cents AS valor_apos_rollback FROM transactions
+WHERE owner_id = @demo_owner AND id = @transferencia;
 
-SELECT a.action, a.previous_amount_cents, a.amount_cents
-FROM transaction_audit AS a
-JOIN transactions AS t ON t.id = a.transaction_id
-WHERE t.owner_id = @demo_owner AND t.id = @transferencia_exemplo
-ORDER BY a.id;
+START TRANSACTION;
+DELETE FROM transactions WHERE owner_id = @demo_owner AND id = @transferencia;
+COMMIT;
 
--- Limpeza: remova apenas a transferência temporária; a FK remove a auditoria do exemplo.
+-- O usuário temporário tem conta, cartão e lançamento vinculados.
+-- O gatilho libera os vínculos antes de o banco apagar os demais registros em cascata.
+SET @usuario_teste = UUID(), @conta_teste = UUID(), @cartao_teste = UUID(), @lancamento_teste = UUID();
 START TRANSACTION;
 
-DELETE FROM transactions
-WHERE owner_id = @demo_owner AND id = @transferencia_exemplo;
+INSERT INTO users (id, email, display_name, password_hash, password_salt)
+VALUES (@usuario_teste, CONCAT(@usuario_teste, '@example.invalid'), 'Teste do gatilho', 'teste', 'teste');
+INSERT INTO accounts (id, owner_id, name, kind)
+VALUES (@conta_teste, @usuario_teste, 'Conta de teste', 'checking');
+INSERT INTO cards (id, owner_id, name, kind, linked_account)
+VALUES (@cartao_teste, @usuario_teste, 'Cartão de teste', 'debit', @conta_teste);
+INSERT INTO transactions (id, owner_id, description, account, card_id, occurred_at, amount_cents, type)
+VALUES (@lancamento_teste, @usuario_teste, 'Teste do gatilho', @conta_teste, @cartao_teste, CURRENT_TIMESTAMP, 100, 'expense');
 
-COMMIT;
+DELETE FROM users WHERE id = @usuario_teste;
+SELECT
+    (SELECT COUNT(*) FROM users WHERE id = @usuario_teste) AS usuarios_restantes,
+    (SELECT COUNT(*) FROM accounts WHERE owner_id = @usuario_teste) AS contas_restantes,
+    (SELECT COUNT(*) FROM cards WHERE owner_id = @usuario_teste) AS cartoes_restantes,
+    (SELECT COUNT(*) FROM transactions WHERE owner_id = @usuario_teste) AS lancamentos_restantes;
+ROLLBACK;

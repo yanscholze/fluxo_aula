@@ -1,87 +1,55 @@
-# Fluxo Aula
+# Fluxo Pessoal
 
-Aplicação web de finanças pessoais para a disciplina de Banco de Dados. A interface React foi reaproveitada de `ui_fluxo` e os dados são persistidos no MySQL, a partir do MER simplificado.
+Aplicação local baseada no esquema MySQL 8.4 fornecido com o projeto. O SQL principal cria sete tabelas. A interface permite criar uma conta de acesso, editar o perfil e gerenciar contas financeiras, categorias, cartões e lançamentos. Cada parcelamento é criado a partir de um lançamento e suas parcelas ficam agrupadas no extrato.
 
 ## Abrir para a apresentação
 
-Abra um terminal na pasta `fluxo_aula` e execute:
+No terminal, na pasta do projeto, rode:
 
 ```bash
 ./APRESENTAR.sh
 ```
 
-Abra [http://127.0.0.1:5174](http://127.0.0.1:5174) e entre com **demo@fluxo.local** e senha **FluxoDemo123!**. Com o Fluxo aberto, rode `./APRESENTAR.sh --sql` em outro terminal para executar as consultas do roteiro.
+Abra [o Fluxo](http://127.0.0.1:5174) e entre com **demo@fluxo.local** e senha `FluxoDemo123!`. Para ver as consultas do [roteiro](docs/apresentacao.md), rode `./APRESENTAR.sh --sql` em outro terminal.
 
-O atalho usa o MySQL e o Node.js locais quando o ambiente portátil já está preparado. Nesse modo, os dados ficam em `${XDG_DATA_HOME:-$HOME/.local/share}/fluxo-aula` e **Ctrl+C** encerra a aplicação e o banco do Fluxo. Em outro computador com Docker Compose, o mesmo comando prepara o ambiente em contêineres e importa a conta de demonstração. Use `docker compose stop` para parar os contêineres.
+Neste computador, o atalho usa o MySQL local já preparado. Ele instala este esquema em `fluxo_pessoal_apresentacao`, separado das bases anteriores. Em outra máquina com Docker Compose, o mesmo comando prepara um volume novo. Para encerrar, use **Ctrl+C** no ambiente local ou `docker compose stop` com Docker.
 
-## Arquivos do banco
+## SQL em ordem
 
-```text
-database/
-├── 01-banco.sql           Cria toda a estrutura do MySQL.
-├── 02-dados-demo.sql      Carrega dados fictícios para a apresentação.
-└── 03-consultas-demo.sql  Demonstra consultas, índice, transação e auditoria.
-```
+| Arquivo | O que faz |
+| --- | --- |
+| [01-banco.sql](database/01-banco.sql) | Instala o esquema enviado, com sete tabelas, índice, função, procedure, gatilho e visão. |
+| [02-dados-demo.sql](database/02-dados-demo.sql) | Cria a conta fictícia e seus exemplos financeiros. |
+| [03-consultas-demo.sql](database/03-consultas-demo.sql) | Demonstra as consultas, o índice, a transação e os requisitos da apresentação. |
 
-Uma instalação nova precisa só do [01-banco.sql](database/01-banco.sql). Ele reúne as tabelas, chaves, restrições, índice, função, procedure, gatilhos e visão, em ordem de criação. Use os arquivos 02 e 03, nessa sequência, para a demonstração.
+Para criar um ambiente Docker vazio e cadastrar seu próprio usuário, rode `docker compose up --build`.
 
-## Rodar com Docker
+## Instalação manual
 
-Pré-requisito: Docker com o plugin Docker Compose. No terminal, abra a pasta `fluxo_aula` e execute:
-
-```bash
-docker compose up --build
-```
-
-Quando o serviço indicar que o Fluxo está disponível, abra [http://127.0.0.1:5174](http://127.0.0.1:5174) e clique em **Criar uma conta**. O Compose prepara o MySQL e importa `01-banco.sql` na primeira inicialização do volume.
-
-Para parar, use **Ctrl+C** no terminal ou `docker compose stop`. Os dados ficam no volume `fluxo-db`. Para mudar a porta publicada, defina `PORT` em um arquivo `.env` antes de subir o Compose.
-
-Para iniciar o Docker já com o perfil fictício, use `./APRESENTAR.sh`.
-
-## Rodar com Node.js e MySQL instalados
-
-Use Node.js 22.22.2 ou superior, npm e MySQL 8.4, a versão usada no projeto. No terminal aberto em `fluxo_aula`, use este comando para criar uma base nova:
+Use Node.js 22.22.2 ou superior, npm e uma instância MySQL 8.4 com o nome `fluxo_pessoal` disponível. Importe o esquema. Para usar a conta de apresentação, importe também o arquivo 02.
 
 ```bash
 mysql -u root -p < database/01-banco.sql
+mysql -u root -p < database/02-dados-demo.sql
 ```
 
-Crie um usuário MySQL para a aplicação. Entre com `mysql -u root -p` e execute o SQL abaixo, substituindo a senha:
+No cliente MySQL, crie a conta de conexão da aplicação e escolha a senha:
 
 ```sql
-CREATE USER 'fluxo'@'127.0.0.1' IDENTIFIED BY 'escolha_uma_senha';
+CREATE USER IF NOT EXISTS 'fluxo'@'127.0.0.1' IDENTIFIED BY 'escolha_uma_senha';
 GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON fluxo_pessoal.* TO 'fluxo'@'127.0.0.1';
 ```
 
-Copie a configuração, edite `DB_PASSWORD` e ajuste host, porta ou usuário conforme seu MySQL. Em seguida, instale, compile e inicie:
+Copie `.env.example` para `.env`, informe a senha em `DB_PASSWORD` e execute:
 
 ```bash
-cp .env.example .env
 npm ci
 npm run build
 npm start
 ```
 
-Abra [http://127.0.0.1:5174](http://127.0.0.1:5174). Para carregar o perfil fictício e executar as consultas do roteiro, rode em ordem:
+## Como funciona
 
-```bash
-mysql -u root -p < database/02-dados-demo.sql
-mysql -u root -p < database/03-consultas-demo.sql
-```
+A interface React chama a API Express, que usa [consultas parametrizadas](server/repository.mjs) via `mysql2`. O login verifica a senha armazenada em `users` e usa um cookie assinado para identificar o usuário. As contas, categorias, cartões e lançamentos pertencem ao usuário conectado. A visão `vw_lancamentos` fornece o extrato, a procedure grava transferências e `installment_groups` reúne lançamentos parcelados.
 
-## Como usar
-
-1. Cadastre uma conta e as categorias que deseja utilizar.
-2. Registre receitas, despesas, transferências, estornos e pagamentos de fatura em **Lançamentos**. Informe o valor total ao parcelar uma despesa. O Fluxo distribui os centavos e registra cada parcela.
-3. Cadastre cartões e confira as faturas por competência. Cadastre compromissos recorrentes e confirme o mês para efetivar o lançamento.
-4. Vincule despesas a viagens, consulte pontos e cashback, revise capturas registradas e acompanhe os resumos no **Painel** e em **Relatórios**.
-
-## Arquitetura e funcionamento
-
-- `ui_fluxo/` guarda a interface React e o sistema visual. A interface faz requisições JSON à API no mesmo endereço.
-- `server/index.mjs` serve a interface compilada e a API Express. `auth.mjs` valida o usuário e persiste as sessões. `finance.mjs` valida as operações e `repository.mjs` lê os registros do usuário com consultas parametrizadas via `mysql2`.
-- Valores monetários são guardados em centavos. Uma transferência registra a conta de origem e a de destino na mesma linha e atualiza o saldo calculado de cada uma. O banco valida a operação e grava sua auditoria na mesma transação.
-- Os dados financeiros de cada usuário ficam separados por titular. No painel, os totais em BRL usam lançamentos confirmados, enquanto os saldos individuais são exibidos na moeda de cada conta.
-
-A sequência de demonstração e a conferência de cada requisito estão no [roteiro da apresentação](docs/apresentacao.md). O MER, as participações e o mapeamento de chaves estão na [modelagem do banco](docs/modelagem.md).
+Veja as relações e as chaves na [modelagem](docs/modelagem.md).

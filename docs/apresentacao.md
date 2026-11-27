@@ -1,79 +1,70 @@
 # Roteiro da apresentação
 
-Inicie o Fluxo com `./APRESENTAR.sh` conforme o [README](../README.md). Com o aplicativo aberto, execute `./APRESENTAR.sh --sql` em outro terminal. Para rodar os exemplos um a um, abra o arquivo [03-consultas-demo.sql](../database/03-consultas-demo.sql) em um cliente MySQL com a base `fluxo_pessoal`.
+Abra o Fluxo e entre com `demo@fluxo.local` e senha `FluxoDemo123!`. Os dados fictícios são preparados pelo script 02. [Como iniciar](../README.md) · [Dados de exemplo](../database/02-dados-demo.sql)
 
-## Sequência para demonstrar
+1. Mostre os cadastros de conta, categoria e cartão e a relação deles com os lançamentos. Abra a compra parcelada para mostrar duas linhas ligadas a um grupo. [Modelo](modelagem.md)
+2. Em **Lançamentos**, transfira R$ 25,00 da **Conta corrente** para a **Reserva**. Mostre a saída na origem, a entrada no destino e a linha de transferência no extrato.
+3. Execute `./APRESENTAR.sh --sql` em outro terminal. Demonstre o extrato, as despesas por categoria, o `EXPLAIN` e o `ALTER TABLE` da tabela temporária. [Consultas](../database/03-consultas-demo.sql)
+4. Acompanhe a transferência SQL de R$ 25,00. O teste muda o valor para R$ 30,00, exclui a linha e executa `ROLLBACK`. O valor restaurado é R$ 25,00. No fim, o script remove os registros que criou para os testes. [Consultas](../database/03-consultas-demo.sql)
 
-1. Entre com o perfil de apresentação. No [arquivo do banco](../database/01-banco.sql), localize `users`, `accounts`, `categories` e `transactions`. Use o [MER](modelagem.md) para mostrar que um usuário pode ter várias contas e que uma categoria pode aparecer em lançamentos de várias contas.
-2. Abra **Lançamentos** e transfira R$ 25,00 da Conta principal para a Reserva de emergência. Em **Contas**, mostre a saída e a entrada do mesmo valor. No banco, a transferência é uma linha com conta de origem, conta de destino e valor em centavos.
-3. Siga o caminho dessa linha. A API envia os parâmetros à `sp_registrar_transferencia`. A procedure valida as contas e grava a linha. O gatilho registra a inclusão na auditoria e o `COMMIT` confirma os dois registros. A aplicação lê os lançamentos pela visão `vw_lancamentos`.
-4. Execute as consultas do arquivo 03. Explique a consulta de despesas por categoria em álgebra relacional. Mostre no `EXPLAIN` como o índice evita a ordenação extra e como o `ROLLBACK` desfaz a atualização de teste e sua auditoria.
+## Requisitos no código
 
-## Conferência dos requisitos
-
-| Requisito | Onde está | O que explicar |
-| --- | --- | --- |
-| Modelagem conceitual | [MER](modelagem.md) | Usuário e conta formam uma relação 1:N. Conta e categoria se relacionam N:M pelos lançamentos categorizados. Mostre quem pode existir sem lançamentos e quais vínculos podem ser vazios. |
-| Modelo relacional | [Tabela de PKs e FKs](modelagem.md) | `transactions.account` e `transactions.category` referenciam as respectivas entidades com o titular na chave composta. `transactions.destination_account` representa o destino de uma transferência. |
-| Normalização até 3FN | [Banco (01)](../database/01-banco.sql) | O nome, a competência do lote e a data da importação dependem do lote. O total de parcelas depende do grupo. As tabelas `import_batches` e `installment_groups` evitam alterar a mesma informação em cada lançamento. |
-| Três consultas em álgebra | [Representações abaixo](#álgebra-relacional) | Na consulta 2, filtre despesas confirmadas, faça a junção com as categorias e compare o total calculado com o limite de R$ 100,00. |
-| DDL | [Banco (01)](../database/01-banco.sql) | Mostre os tipos `VARCHAR(64)`, `DATETIME` e `BIGINT`, PKs e FKs, `NOT NULL`, e-mail `UNIQUE`, o `ALTER TABLE` que cria o índice e o `CHECK` de valor positivo. |
-| DML | [Dados (02)](../database/02-dados-demo.sql) e [consultas (03)](../database/03-consultas-demo.sql) | Mostre os `INSERT` do povoamento, o `UPDATE` e o `DELETE` com `WHERE` em dados temporários e consultas com filtro, ordenação, junção, subconsulta, `GROUP BY` e `HAVING`. |
-| View | `vw_lancamentos` no [banco (01)](../database/01-banco.sql) | Mostre o `LEFT JOIN` com o grupo para recuperar a quantidade de parcelas, o cálculo do valor assinado e a leitura dessa visão pela aplicação. |
-| Função e procedure | `fn_valor_movimento` e `sp_registrar_transferencia` no [banco (01)](../database/01-banco.sql) | A função devolve um valor positivo para receitas e estornos e negativo para saídas. A procedure valida as contas e a moeda, grava a transferência e encerra a transação. |
-| Trigger | `tr_lancamentos_audit_insert` e `tr_lancamentos_audit_update` no [banco (01)](../database/01-banco.sql) | Mostre como inserções e alterações geram histórico com os valores do lançamento. A exclusão pela interface marca `deleted_at` e também gera auditoria de atualização. |
-| Índice | `idx_transactions_owner_data` no [banco (01)](../database/01-banco.sql) e `EXPLAIN` no [arquivo de consultas (03)](../database/03-consultas-demo.sql) | A chave começa por titular e exclusão lógica, filtros de igualdade. Os campos seguintes atendem à ordenação do extrato. Compare a coluna `key` e observe `Using filesort` quando a consulta ignora o índice. |
-| Transação | `sp_registrar_transferencia` e exemplos no [arquivo de consultas (03)](../database/03-consultas-demo.sql) | Identifique `START TRANSACTION`, `COMMIT` e o `ROLLBACK` do tratador de erros. Mostre a alteração temporária desfeita junto com sua auditoria. |
-| Conexão aplicação–BD | [Inicialização do servidor](../server/index.mjs), [repositório](../server/repository.mjs) e [operações financeiras](../server/finance.mjs) | O pool MySQL é compartilhado. O repositório usa `execute(sql, [ownerId, id])` com parâmetros separados do SQL. Mostre como a sessão fornece o titular usado nas consultas. |
+| Requisito | O que mostrar |
+| --- | --- |
+| Modelo conceitual, relacional e 3FN | Mostre entidades, cardinalidades, participações, PKs, FKs e os exemplos de normalização. [Modelagem](modelagem.md) |
+| DDL | Mostre `CREATE TABLE`, tipos, chaves, `NOT NULL`, `UNIQUE` e `CHECK`. O `ALTER TABLE` acrescenta uma coluna a uma tabela temporária que o próprio roteiro cria e remove. [Banco](../database/01-banco.sql) · [Consultas](../database/03-consultas-demo.sql) |
+| DML | Mostre o povoamento com `INSERT`, o `UPDATE` e o `DELETE` com `WHERE`. As consultas usam filtro, ordenação, junção, subconsulta, `GROUP BY` e `HAVING`. [Povoamento](../database/02-dados-demo.sql) · [Consultas](../database/03-consultas-demo.sql) |
+| View e função | A aplicação lê a `vw_lancamentos`. A visão busca a quantidade de parcelas e chama `fn_valor_movimento` para calcular o valor com sinal para a origem. [Banco](../database/01-banco.sql) |
+| Procedure | A `sp_registrar_transferencia` valida o titular, as contas, a moeda e o valor. O `COMMIT` confirma a linha. Em caso de erro, o tratador executa `ROLLBACK`. [Banco](../database/01-banco.sql) |
+| Trigger | `tr_usuarios_liberar_referencias` exclui os lançamentos e os cartões antes de excluir um usuário. O teste cria um usuário temporário com vínculos e confirma que as contagens ficam em zero após a exclusão. [Banco](../database/01-banco.sql) · [Consultas](../database/03-consultas-demo.sql) |
+| Índice | O `idx_transactions_owner_data` começa com titular e exclusão lógica, os dois filtros de igualdade. As colunas seguintes seguem a ordem do extrato. Compare a coluna `key` e o `Using filesort` em `Extra`. [Consultas](../database/03-consultas-demo.sql) |
+| Conexão da aplicação | Mostre a conexão `mysql2`, o filtro com o titular da sessão e os valores enviados como parâmetros numa consulta. [Servidor](../server/index.mjs) · [Repositório](../server/repository.mjs) |
 
 ## Álgebra relacional
 
-As três expressões correspondem às três primeiras consultas do [arquivo 03](../database/03-consultas-demo.sql). Usam álgebra relacional estendida, com projeção em multiconjuntos como o SQL sem `DISTINCT`, `σ` para seleção, `π` para projeção, `⋈` para junção, `γ` para agregação e `τ` para ordem de apresentação. `u` representa o usuário de apresentação, `m` o primeiro dia da competência do extrato e `m₊` o primeiro dia da competência seguinte.
+As expressões correspondem às três primeiras consultas do script 03. Usam `σ` para seleção, `π` para projeção, `⋈` para junção, `⟕` para junção externa à esquerda, `γ` para agregação e `τ` para ordenação. A projeção preserva repetições, como no SQL sem `DISTINCT`. `u` é o ID do titular.
 
-### 1. Extrato de uma competência
+### 1. Extrato
 
 ```text
-E ← σ[owner_id = u ∧ deleted_at IS NULL ∧ m ≤ occurred_at < m₊](vw_lancamentos)
-
-Q₁ ← π[description, occurred_at, type, amount_cents, installments, valor_origem_centavos](
-        τ[occurred_at DESC, id DESC](E)
-      )
+L ← σ[owner_id = u ∧ deleted_at IS NULL](vw_lancamentos)
+E ← L ⟕[L.owner_id = O.owner_id ∧ L.account = O.id] O
+E₂ ← E ⟕[L.owner_id = D.owner_id ∧ L.destination_account = D.id] D
+E₃ ← E₂ ⟕[L.owner_id = C.owner_id ∧ L.category = C.id] C
+Q₁ ← π[L.occurred_at, L.description, O.name → origem, D.name → destino,
+        C.name → categoria, L.installments, L.valor_origem_centavos](
+        τ[L.occurred_at DESC, L.created_at DESC, L.id DESC](E₃))
 ```
+
+`O` e `D` são cópias renomeadas de `accounts`, e `C` é `categories`. As junções externas mantêm as linhas com origem, destino ou categoria vazios.
 
 ### 2. Despesas confirmadas por categoria
 
 ```text
-D ← σ[owner_id = u ∧ type = 'expense' ∧ status = 'confirmed' ∧ deleted_at IS NULL](transactions)
-
-C ← D ⋈[D.owner_id = categories.owner_id ∧ D.category = categories.id] categories
-
-G ← γ[categories.id, categories.name;
-       COUNT(*) → lancamentos, SUM(D.amount_cents) → total_centavos](C)
-
-Q₂ ← π[name → categoria, lancamentos, total_centavos](
-        τ[total_centavos DESC, name ASC](σ[total_centavos ≥ 10000](G))
-      )
+X ← σ[owner_id = u ∧ type = 'expense' ∧ status = 'confirmed' ∧ deleted_at IS NULL](transactions)
+G ← γ[C.id, C.name; COUNT(*) → quantidade, SUM(X.amount_cents) → total_centavos](
+        X ⋈[X.owner_id = C.owner_id ∧ X.category = C.id] C)
+Q₂ ← π[C.name → categoria, quantidade, total_centavos](
+        τ[total_centavos DESC](σ[quantidade ≥ 2](G)))
 ```
 
-Na apresentação, siga a ordem de `D`, `C`, `G` e `Q₂`. O filtro inicial elimina lançamentos de outros titulares, despesas planejadas e registros excluídos. A junção identifica a categoria pelo titular e ID. O agrupamento por ID mantém categorias homônimas separadas. O segundo filtro opera sobre a soma já calculada, por isso corresponde ao `HAVING`.
+Filtre as despesas, recupere o nome da categoria e calcule o total e a quantidade por grupo. O filtro da quantidade opera depois do agrupamento e corresponde a `HAVING COUNT(*) >= 2`.
 
-### 3. Despesas acima da média
+### 3. Despesas confirmadas acima da média
 
 ```text
-M ← γ[AVG(amount_cents) → media](D)
-
-Q₃ ← π[description, occurred_at, amount_cents](
-        τ[amount_cents DESC, occurred_at DESC](σ[amount_cents > media](D × M))
-      )
+M ← γ[AVG(amount_cents) → media](X)
+Q₃ ← π[description, amount_cents](
+        τ[amount_cents DESC](σ[amount_cents > media](X × M)))
 ```
 
-A média vem do mesmo conjunto de despesas confirmadas do usuário. O produto com a relação de um valor representa a comparação de cada despesa com o resultado da subconsulta.
+`M` representa o valor da subconsulta. Compare cada despesa de `X` com a média antes de ordenar.
 
-## ACID no Fluxo
+## Transação e ACID
 
-- **Atomicidade.** O registro da transferência e o evento do gatilho fazem parte da mesma unidade. O exemplo de rollback desfaz tanto a alteração do valor quanto seu evento de auditoria.
-- **Consistência.** A transação respeita chaves estrangeiras e valor positivo. A procedure também exige duas contas do mesmo titular, distintas e com a mesma moeda.
-- **Isolamento.** `SELECT … FOR UPDATE` bloqueia a linha do usuário durante a transferência e serializa as escritas financeiras feitas pela API para aquele titular.
-- **Durabilidade.** Depois do `COMMIT`, o lançamento e sua auditoria estão no MySQL. Recarregar a interface ou reiniciar o aplicativo preserva os dados.
+- **Atomicidade.** A transferência é confirmada como uma unidade. O exemplo de `ROLLBACK` desfaz juntos o `UPDATE` e o `DELETE` de teste.
+- **Consistência.** As chaves estrangeiras mantêm os vínculos no mesmo titular. A procedure exige contas diferentes, moeda igual e valor positivo.
+- **Isolamento.** O `SELECT ... FOR UPDATE` bloqueia as linhas do usuário e das contas durante a conferência da transferência.
+- **Durabilidade.** O `COMMIT` torna o lançamento persistente no MySQL. O teste consegue reler a linha confirmada quando reverte uma transação posterior.
 
-Execute a procedure por `CALL` fora de uma transação já aberta na sessão do cliente SQL. O controle da transação da transferência está na própria procedure.
+Execute o `CALL` com a sessão fora de uma transação aberta, pois a procedure inicia e encerra a própria transação.

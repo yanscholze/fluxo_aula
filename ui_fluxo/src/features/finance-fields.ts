@@ -3,7 +3,7 @@ import {
   type FieldSpec,
   type Fields,
   type Option,
-  type Row,
+  type Records,
 } from "./records";
 
 export const accountTypes = {
@@ -72,7 +72,7 @@ const adjustments = labels({
 });
 
 export const accountFields: FieldSpec[] = [
-  { name: "name", label: "Nome", required: true, maxLength: 255 },
+  { name: "name", label: "Nome da conta", required: true, maxLength: 255 },
   {
     name: "kind",
     label: "Tipo de conta",
@@ -107,7 +107,7 @@ export const accountFields: FieldSpec[] = [
 ];
 
 export const categoryFields: FieldSpec[] = [
-  { name: "name", label: "Nome", required: true, maxLength: 255 },
+  { name: "name", label: "Nome da categoria", required: true, maxLength: 255 },
   {
     name: "kind",
     label: "Tipo de categoria",
@@ -120,13 +120,13 @@ export const categoryFields: FieldSpec[] = [
   { name: "essential", label: "Categoria essencial", kind: "checkbox" },
 ];
 
-export function cardFields(data: Record<string, Row[]>): Fields {
+export function cardFields(data: Records): Fields {
   return (draft) => {
     const credit = (draft?.kind ?? "credit") === "credit";
     const reward = draft?.reward_mode ?? "none";
     const points = reward === "points" || reward === "both";
     return [
-      { name: "name", label: "Nome", required: true, maxLength: 255 },
+      { name: "name", label: "Nome do cartão", required: true, maxLength: 255 },
       {
         name: "kind",
         label: "Tipo de cartão",
@@ -136,6 +136,7 @@ export function cardFields(data: Record<string, Row[]>): Fields {
         defaultValue: "credit",
       },
       { name: "brand", label: "Bandeira", maxLength: 255 },
+      { name: "tier", label: "Categoria do cartão", maxLength: 255 },
       { name: "last4", label: "Últimos quatro dígitos", maxLength: 4 },
       {
         name: "linked_account",
@@ -144,14 +145,19 @@ export function cardFields(data: Record<string, Row[]>): Fields {
         options: options(data.accounts),
         required: !credit,
       },
-      { name: "limit_cents", label: "Limite", kind: "money", hidden: !credit },
+      {
+        name: "limit_cents",
+        label: "Limite",
+        kind: "money",
+        min: 0,
+        hidden: !credit,
+      },
       {
         name: "closing_day",
         label: "Dia de fechamento",
         kind: "integer",
         min: 1,
         max: 31,
-        required: credit,
         hidden: !credit,
       },
       {
@@ -160,7 +166,6 @@ export function cardFields(data: Record<string, Row[]>): Fields {
         kind: "integer",
         min: 1,
         max: 31,
-        required: credit,
         hidden: !credit,
       },
       {
@@ -220,21 +225,20 @@ export function cardFields(data: Record<string, Row[]>): Fields {
   };
 }
 
-export function transactionFields(data: Record<string, Row[]>): Fields {
+export function transactionFields(data: Records): Fields {
   return (draft) => {
-    const type = draft?.type ?? "expense";
-    const allowsCard = ["expense", "refund", "invoice_payment"].includes(
-      String(type),
-    );
-    const isPayment = type === "invoice_payment";
-    const card = allowsCard
-      ? data.cards.find((row) => row.id === draft?.card_id)
+    const type = draft.type ?? "expense";
+    const transfer = type === "transfer";
+    const payment = type === "invoice_payment";
+    const acceptsCard = type === "expense" || type === "refund" || payment;
+    const cards = data.cards.filter((row) => !payment || row.kind === "credit");
+    const card = acceptsCard
+      ? cards.find((row) => row.id === draft.card_id)
       : undefined;
-    const usesAccount = !card || isPayment;
+    const usesAccount = !card || payment;
+    const source = data.accounts.find((row) => row.id === draft.account);
     const categoryKind = type === "refund" ? "expense" : type;
-    const categoryOptions = options(
-      data.categories.filter((row) => row.kind === categoryKind),
-    );
+    const canInstall = type === "expense" && !draft.id;
     return [
       {
         name: "description",
@@ -246,17 +250,31 @@ export function transactionFields(data: Record<string, Row[]>): Fields {
         name: "type",
         label: "Tipo",
         kind: "select",
-        options: labels(transactionTypes),
+        options: labels(
+          draft.installment_group_id
+            ? { expense: "Despesa" }
+            : transactionTypes,
+        ),
         defaultValue: "expense",
         required: true,
       },
-      { name: "amount_cents", label: "Valor", kind: "money", required: true },
       {
         name: "occurred_at",
         label: "Data",
         kind: "date",
         defaultValue: today(),
         required: true,
+      },
+      {
+        name: "amount_cents",
+        label: "Valor",
+        kind: "money",
+        min: 0.01,
+        required: true,
+        hint:
+          canInstall && Number(draft.installments) > 1
+            ? "Informe o valor total da compra."
+            : undefined,
       },
       {
         name: "status",
@@ -267,31 +285,20 @@ export function transactionFields(data: Record<string, Row[]>): Fields {
         required: true,
       },
       {
-        name: "category",
-        label: "Categoria",
-        kind: "select",
-        options: categoryOptions,
-        omitBlank: true,
-        hidden: type === "transfer" || isPayment,
-        hint: "Em branco, aplica a regra do estabelecimento quando houver.",
-      },
-      {
         name: "card_id",
         label: "Cartão",
         kind: "select",
-        options: options(
-          data.cards.filter((row) => !isPayment || row.kind === "credit"),
-        ),
-        hidden: !allowsCard,
-        required: isPayment,
+        options: options(cards),
+        hidden: !acceptsCard,
+        required: payment,
       },
       {
         name: "account",
-        label: type === "transfer" ? "Conta de origem" : "Conta",
+        label: transfer ? "Conta de origem" : "Conta",
         kind: "select",
         options: options(
           data.accounts.filter(
-            (row) => !isPayment || row.currency_code === "BRL",
+            (row) => !payment || (row.currency_code ?? "BRL") === "BRL",
           ),
         ),
         required: usesAccount,
@@ -302,132 +309,46 @@ export function transactionFields(data: Record<string, Row[]>): Fields {
         label: "Conta de destino",
         kind: "select",
         options: options(
-          data.accounts.filter((row) => row.id !== draft?.account),
+          data.accounts.filter(
+            (row) =>
+              row.id !== draft.account &&
+              (!source ||
+                (row.currency_code ?? "BRL") ===
+                  (source.currency_code ?? "BRL")),
+          ),
         ),
-        required: type === "transfer",
-        hidden: type !== "transfer",
-      },
-      {
-        name: "trip_id",
-        label: "Viagem",
-        kind: "select",
-        options: options(data.trips),
-        hidden: type === "transfer" || isPayment,
-      },
-      {
-        name: "invoice_month",
-        label: "Mês da fatura",
-        kind: "month",
-        defaultValue: isPayment ? today().slice(0, 7) : undefined,
-        hidden: !isPayment && card?.kind !== "credit",
-      },
-      ...(!draft?.id && type === "expense"
-        ? [
-            {
-              name: "installments",
-              label: "Quantidade de parcelas",
-              kind: "integer" as const,
-              min: 1,
-              max: 120,
-              defaultValue: 1,
-              hint: "Informe o valor total da compra acima.",
-              required: true,
-            },
-          ]
-        : []),
-    ];
-  };
-}
-
-export function recurringFields(data: Record<string, Row[]>): Fields {
-  return (draft) => {
-    const type = draft?.type ?? "expense";
-    const card = type === "expense" && Boolean(draft?.card_id);
-    return [
-      {
-        name: "description",
-        label: "Descrição",
-        required: true,
-        maxLength: 255,
-      },
-      {
-        name: "type",
-        label: "Tipo",
-        kind: "select",
-        options: labels(categoryTypes),
-        defaultValue: "expense",
-        required: true,
-      },
-      {
-        name: "amount_cents",
-        label: "Valor-base",
-        kind: "money",
-        required: true,
-      },
-      {
-        name: "day_of_month",
-        label: "Dia do mês",
-        kind: "integer",
-        min: 1,
-        max: 31,
-        required: true,
+        required: transfer,
+        hidden: !transfer,
       },
       {
         name: "category",
         label: "Categoria",
         kind: "select",
-        options: options(data.categories.filter((row) => row.kind === type)),
+        options: options(
+          data.categories.filter(({ kind }) => kind === categoryKind),
+        ),
+        hidden: transfer || payment,
       },
       {
-        name: "card_id",
-        label: "Cartão",
-        kind: "select",
-        options: options(data.cards),
-        hidden: type === "income",
+        name: "invoice_month",
+        label: "Competência da fatura",
+        kind: "month",
+        hint: "Se ficar em branco, o Fluxo calcula o mês.",
+        hidden: card?.kind !== "credit",
       },
-      {
-        name: "account",
-        label: "Conta",
-        kind: "select",
-        options: options(data.accounts),
-        required: !card,
-        hidden: card,
-      },
-      {
-        name: "calculation_mode",
-        label: "Cálculo",
-        kind: "select",
-        defaultValue: "fixed",
-        required: true,
-        options: labels({
-          fixed: "Valor fixo",
-          per_business_day: "Valor por dia útil",
-        }),
-      },
-      {
-        name: "schedule_mode",
-        label: "Agenda",
-        kind: "select",
-        defaultValue: "day_of_month",
-        required: true,
-        options: labels({
-          day_of_month: "Dia do mês",
-          business_day_of_month: "Dia útil do mês",
-        }),
-      },
-      {
-        name: "date_adjustment",
-        label: "Ajuste de data",
-        kind: "select",
-        options: adjustments,
-        defaultValue: "none",
-      },
-      {
-        name: "active",
-        label: "Compromisso ativo",
-        kind: "checkbox",
-        defaultValue: true,
-      },
+      ...(canInstall
+        ? [
+            {
+              name: "installments",
+              label: "Número de parcelas",
+              kind: "integer" as const,
+              defaultValue: "1",
+              min: 1,
+              max: 120,
+              required: true,
+            },
+          ]
+        : []),
     ];
   };
 }
